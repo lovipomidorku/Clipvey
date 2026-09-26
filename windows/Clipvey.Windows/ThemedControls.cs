@@ -18,8 +18,26 @@ internal sealed class Card : Panel
         BackColor = palette.Background;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        var padding = 12 * dpi / 96;
-        Padding = new Padding(padding + 2 * dpi / 96, padding, padding, padding);
+        var padding = 14 * dpi / 96;
+        Padding = new Padding(padding, padding, padding, padding);
+    }
+
+    /// Panel не раскладывает дочерние элементы: Padding действует только на Dock. Без этого содержимое
+    /// прижато к левому краю карточки, а AutoSize всё равно прибавляет отступ справа и снизу.
+    /// Поэтому ставим детей столбиком внутрь отступов сами.
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        var y = Padding.Top;
+        foreach (Control child in Controls)
+        {
+            if (!child.Visible)
+                continue;
+            var location = new Point(Padding.Left + child.Margin.Left, y + child.Margin.Top);
+            if (child.Location != location)
+                child.Location = location;
+            y = location.Y + child.Height + child.Margin.Bottom;
+        }
+        base.OnLayout(e);
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)

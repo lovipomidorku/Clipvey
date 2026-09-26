@@ -337,7 +337,7 @@ internal sealed partial class TrayPanel : Form
         Padding = new Padding(S(16), S(14), S(16), S(12));
         Font = Theme.Text(14, _dpi);
 
-        _root.Controls.Add(NewLabel("Clipvey", Theme.Title(20, _dpi), P.Text, P.Background, Width96, new Padding(0, 0, 0, S(4))));
+        _root.Controls.Add(NewLabel("Clipvey", Theme.Title(16, _dpi), P.Text, P.Background, Width96, new Padding(0, 0, 0, S(4))));
         AddUpdateBanner();
         AddDevices();
         AddPairing();
@@ -449,7 +449,8 @@ internal sealed partial class TrayPanel : Form
         return L($"Последняя синхронизация: {time} · {what}", $"Last sync: {time} · {what}");
     }
 
-    private int CardInnerWidth => Width96 - S(28);
+    /// Ширина содержимого карточки: ширина минус отступы Card (по 14 с каждой стороны).
+    private int CardInnerWidth => Width96 - 2 * S(14);
 
     private Control DeviceCard(DeviceStatus device)
     {
@@ -471,7 +472,8 @@ internal sealed partial class TrayPanel : Form
         // Картинки этому устройству не уходят: у него они выключены или старая версия Clipvey.
         if (device.Connected && device.Enabled && _node.ImagesEnabled && !device.AcceptsImages)
             status += L(" · только текст", " · text only");
-        var textWidth = CardInnerWidth - S(28 + 10 + 52);
+        // Значок 28 + отступ 10; справа переключатель 44 + 8 и кнопка «…» 32 + 4.
+        var textWidth = CardInnerWidth - S(28 + 10) - S(44 + 8) - S(32 + 4);
         var texts = NewColumn(P.Card);
         texts.Controls.Add(NewLabel(device.DisplayName, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, textWidth, new Padding(0)));
         if (device.Alias is not null)
@@ -493,11 +495,31 @@ internal sealed partial class TrayPanel : Form
         };
         toggle.Toggled += (_, _) => _node.SetEnabled(device.DeviceId, toggle.Checked);
 
+        // Действия с устройством — в меню «…», как на Mac: две кнопки-ссылки не помещались в строку.
+        var more = NewButton("⋯", () => { }, ButtonKind.Subtle, P.Card, "more:" + device.DeviceId);
+        more.AccessibleName = L($"Действия с «{device.DisplayName}»", $"Actions for “{device.DisplayName}”");
+        more.MinimumSize = new Size(S(32), S(32));
+        more.Margin = new Padding(S(4), 0, 0, 0);
+        more.Click += (_, _) => ShowDeviceMenu(more, device);
+        var controls = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            BackColor = P.Card,
+            Margin = new Padding(0),
+            Anchor = AnchorStyles.Right,
+        };
+        toggle.Anchor = AnchorStyles.None;
+        controls.Controls.Add(toggle);
+        controls.Controls.Add(more);
+
         table.Controls.Add(icon, 0, 0);
         table.Controls.Add(texts, 1, 0);
-        table.Controls.Add(toggle, 2, 0);
+        table.Controls.Add(controls, 2, 0);
 
-        Control actions;
+        Control? actions;
         if (_renaming == device.DeviceId)
         {
             // Переименование прямо в карточке: MessageBox забрал бы фокус, и панель спряталась бы.
@@ -551,19 +573,13 @@ internal sealed partial class TrayPanel : Form
         }
         else
         {
-            var rename = NewButton(L("Переименовать…", "Rename…"), () => StartRename(device), ButtonKind.Subtle, P.Card, "rename:" + device.DeviceId);
-            rename.AccessibleName = L($"Переименовать «{device.DisplayName}»", $"Rename “{device.DisplayName}”");
-            var unpair = NewButton(L("Разорвать связь", "Unpair"), () =>
-            {
-                _confirmUnpair = device.DeviceId;
-                _renaming = null;
-                RefreshContent();
-            }, ButtonKind.Subtle, P.Card, "unpair:" + device.DeviceId);
-            actions = NewRow(P.Card, rename, unpair);
-            actions.Margin = new Padding(0, S(4), 0, 0);
+            actions = null;
         }
-        table.Controls.Add(actions, 1, 1);
-        table.SetColumnSpan(actions, 2);
+        if (actions is not null)
+        {
+            table.Controls.Add(actions, 1, 1);
+            table.SetColumnSpan(actions, 2);
+        }
 
         card.Controls.Add(table);
         return card;
@@ -819,7 +835,8 @@ internal sealed partial class TrayPanel : Form
         AddSection(L("Настройки", "Settings"));
         var card = NewCard();
         var column = NewColumn(P.Card);
-        var labelWidth = CardInnerWidth - S(150);
+        // Слева подпись, справа переключатель (44 + 8); у строки «Язык» справа кнопка пошире.
+        var labelWidth = CardInnerWidth - S(44 + 8);
 
         // Своё имя: другие устройства видят его в списке и при связывании.
         var nameTitle = L("Имя этого компьютера", "This PC’s name");
@@ -858,6 +875,7 @@ internal sealed partial class TrayPanel : Form
             }
         };
         table.Controls.Add(autostartLabel, 0, 0);
+        table.SetColumnSpan(autostartLabel, 2);
         table.Controls.Add(autostart, 2, 0);
 
         var imagesText = L("Передавать картинки", "Share images");
@@ -880,7 +898,7 @@ internal sealed partial class TrayPanel : Form
         table.SetColumnSpan(imagesLabels, 2);
         table.Controls.Add(images, 2, 1);
 
-        var languageLabel = NewLabel(L("Язык", "Language"), Theme.Text(14, _dpi), P.Text, P.Card, labelWidth, new Padding(0, S(10), 0, 0));
+        var languageLabel = NewLabel(L("Язык", "Language"), Theme.Text(14, _dpi), P.Text, P.Card, CardInnerWidth - S(160), new Padding(0, S(10), 0, 0));
         languageLabel.Anchor = AnchorStyles.Left;
         var current = TrayApplication.LanguageChoices().First(choice => choice.Value == Setting).Title;
         var language = NewButton(current + "  ▾", () => { }, ButtonKind.Standard, P.Card, "language");
@@ -889,6 +907,7 @@ internal sealed partial class TrayPanel : Form
         language.Margin = new Padding(0, S(10), 0, 0);
         language.Click += (_, _) => ShowLanguageMenu(language);
         table.Controls.Add(languageLabel, 0, 2);
+        table.SetColumnSpan(languageLabel, 2);
         table.Controls.Add(language, 2, 2);
 
         column.Controls.Add(table);
@@ -910,6 +929,31 @@ internal sealed partial class TrayPanel : Form
     }
 
     /// Выбор языка — выпадающим меню: оно не забирает фокус, и панель не прячется.
+    private void ShowDeviceMenu(Control anchor, DeviceStatus device)
+    {
+        var menu = new ContextMenuStrip { Renderer = new ThemedMenuRenderer(P) };
+        var rename = new ToolStripMenuItem(L("Переименовать…", "Rename…"));
+        rename.Click += (_, _) => BeginInvoke(() => StartRename(device));
+        menu.Items.Add(rename);
+        if (device.Alias is not null)
+        {
+            var reset = new ToolStripMenuItem(L($"Вернуть имя «{device.Name}»", $"Restore name “{device.Name}”"));
+            reset.Click += (_, _) => BeginInvoke(() => _node.SetAlias(device.DeviceId, ""));
+            menu.Items.Add(reset);
+        }
+        menu.Items.Add(new ToolStripSeparator());
+        var unpair = new ToolStripMenuItem(L("Разорвать связь…", "Unpair…")) { ForeColor = P.Danger };
+        unpair.Click += (_, _) => BeginInvoke(() =>
+        {
+            _confirmUnpair = device.DeviceId;
+            _renaming = null;
+            RefreshContent();
+        });
+        menu.Items.Add(unpair);
+        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Show(anchor, new Point(anchor.Width, anchor.Height), ToolStripDropDownDirection.BelowLeft);
+    }
+
     private void ShowLanguageMenu(Control anchor)
     {
         var menu = new ContextMenuStrip { Renderer = new ThemedMenuRenderer(P) };
