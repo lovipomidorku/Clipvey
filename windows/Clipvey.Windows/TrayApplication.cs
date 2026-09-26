@@ -28,7 +28,9 @@ internal sealed class TrayApplication : ApplicationContext
         var form = SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
         _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
             deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled);
-        _watcher = new ClipboardWatcher(OnLocalCopy);
+        _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage,
+            shouldRead: () => _node.Devices.Any(device => device.Connected),
+            shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages));
 
         _tray = new NotifyIcon
         {
@@ -49,7 +51,12 @@ internal sealed class TrayApplication : ApplicationContext
         _node.ClipReceived += (text, from) => OnUi(() =>
         {
             _watcher.WriteRemote(text);
-            NoteSync(new LastSync(DateTime.Now, from));
+            NoteSync(new LastSync(DateTime.Now, from, SyncKind.Text));
+        });
+        _node.ImageReceived += (data, mime, from) => OnUi(() =>
+        {
+            _watcher.WriteRemoteImage(data, mime);
+            NoteSync(new LastSync(DateTime.Now, from, SyncKind.Image));
         });
         _node.Changed += () => OnUi(Refresh);
         _node.IncomingPairingChanged += incoming => OnUi(() =>
@@ -172,7 +179,13 @@ internal sealed class TrayApplication : ApplicationContext
         // «Отправлено» — приблизительно: ошибки отправки узел пишет в журнал, но наружу не сообщает.
         // Слишком длинный текст узел не отправляет — его не отмечаем.
         if (System.Text.Encoding.UTF8.GetByteCount(text) <= Protocol.MaxClipBytes)
-            NoteSync(new LastSync(DateTime.Now, From: null));
+            NoteSync(new LastSync(DateTime.Now, From: null, SyncKind.Text));
+    }
+
+    private void OnLocalImage(byte[] data, string mime)
+    {
+        if (_node.SendImage(data, mime) > 0)
+            NoteSync(new LastSync(DateTime.Now, From: null, SyncKind.Image));
     }
 
     private void NoteSync(LastSync sync)
@@ -220,7 +233,7 @@ internal sealed class TrayApplication : ApplicationContext
     private void ShowForm()
     {
         if (_form is null || _form.IsDisposed)
-            _form = new TrayPanel(_node, () => _lastSync, _updater);
+            _form = new TrayPanel(_node, () => _lastSync, _updater, Rename, SetImagesEnabled);
         _form.ShowPanel();
     }
 

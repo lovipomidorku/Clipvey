@@ -85,6 +85,7 @@ internal static class Theme
     private static string? _textFamily;
     private static string? _titleFamily;
     private static string? _monoFamily;
+    private static string? _iconFamily;
 
     public static Palette Current { get; private set; } = ReadSystemIsDark() ? Palette.Dark : Palette.Light;
 
@@ -148,6 +149,18 @@ internal static class Theme
     /// Моноширинный шрифт для кода связывания.
     public static Font Mono(float pixels, int dpi, FontStyle style = FontStyle.Regular) =>
         Get(_monoFamily ??= Pick("Cascadia Mono", Pick("Consolas", FontFamily.GenericMonospace.Name)), pixels, dpi, style);
+
+    /// Шрифт значков: Segoe Fluent Icons (Windows 11), иначе Segoe MDL2 Assets (Windows 10); null — ни одного нет.
+    public static Font? Icons(float pixels, int dpi)
+    {
+        if (_iconFamily is null)
+        {
+            _iconFamily = Pick("Segoe Fluent Icons", "");
+            if (_iconFamily.Length == 0)
+                _iconFamily = Pick("Segoe MDL2 Assets", "");
+        }
+        return _iconFamily.Length > 0 ? Get(_iconFamily, pixels, dpi, FontStyle.Regular) : null;
+    }
 
     /// Шрифты кэшируются и не освобождаются: их немного, и они живут, пока работает программа.
     private static Font Get(string family, float pixels, int dpi, FontStyle style)
