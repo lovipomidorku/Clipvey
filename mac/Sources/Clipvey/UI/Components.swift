@@ -142,6 +142,125 @@ struct CodeBlock: View {
     }
 }
 
+// MARK: - Устройства
+
+extension DeviceType {
+    /// Значок SF Symbols по os и form (docs/protocol.md, «Тип устройства»).
+    /// Незнакомое или отсутствующее значение — общий значок монитора.
+    var symbolName: String {
+        if form == "laptop" { return "laptopcomputer" }
+        switch os {
+        case "mac": return "desktopcomputer"
+        case "windows", "linux": return "pc"
+        default: return "display"
+        }
+    }
+}
+
+/// Значок типа устройства; если задан цвет, в углу — точка состояния подключения.
+struct DeviceIcon: View {
+    let type: DeviceType
+    var indicator: Color?
+
+    var body: some View {
+        Image(systemName: type.symbolName)
+            .font(.system(size: 17))
+            .foregroundStyle(.secondary)
+            .frame(width: 26, height: 22)
+            .overlay(alignment: .bottomTrailing) {
+                if let indicator {
+                    Circle()
+                        .fill(indicator)
+                        .frame(width: 8, height: 8)
+                        // Кольцо цвета фона отделяет точку от контура значка.
+                        .overlay(Circle().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5).padding(-1.5))
+                        .offset(x: 2, y: 1)
+                }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// Имя устройства в списке: псевдоним (или имя) и, если есть псевдоним, мелко — имя, которое сообщает само устройство.
+struct DeviceTitle: View {
+    let displayName: String
+    let name: String
+    let hasAlias: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(displayName)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if hasAlias {
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .help(hasAlias
+              ? L("Имя на самом устройстве: \(name)", "Name on the device itself: \(name)")
+              : name)
+    }
+}
+
+/// Левая часть строки устройства: значок с точкой состояния, имя и состояние.
+/// Отдельно от кнопок, чтобы её можно было отрисовать без узла.
+struct DeviceSummary: View {
+    let device: ClipveyNode.DeviceStatus
+    /// Своя настройка «Передавать картинки». Когда она выключена, пометка «только текст» не показывается:
+    /// иначе она перекладывала бы на другое устройство то, что выключено здесь.
+    let imagesEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            DeviceIcon(type: device.type, indicator: indicatorColor)
+            VStack(alignment: .leading, spacing: 1) {
+                DeviceTitle(displayName: device.displayName, name: device.name, hasAlias: device.alias != nil)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(isTextOnly
+                          ? L("Это устройство не принимает картинки: на нём выключена передача картинок или стоит старая версия Clipvey.",
+                              "This device doesn’t accept images: image sync is off there, or it runs an older Clipvey.")
+                          : "")
+            }
+        }
+    }
+
+    private var isTextOnly: Bool {
+        imagesEnabled && device.enabled && device.connected && !device.acceptsImages
+    }
+
+    private var indicatorColor: Color {
+        if device.connected { return .green }
+        if !device.enabled { return .gray.opacity(0.5) }
+        return device.problem == nil ? .gray : .orange
+    }
+
+    private var statusText: String {
+        if !device.enabled { return L("Синхронизация выключена", "Sync is off") }
+        if device.connected {
+            return isTextOnly ? L("Подключено · только текст", "Connected · text only") : L("Подключено", "Connected")
+        }
+        return device.problem?.text ?? L("Не в сети", "Offline")
+    }
+}
+
+/// Строка ввода имени не длиннее 63 байт UTF-8, как у ClipveyNode.normalizedName, но без обрезки
+/// пробелов: иначе при наборе нельзя поставить пробел между словами. Пробелы по краям убирает сохранение.
+func limitedNameInput(_ raw: String) -> String {
+    var result = ""
+    for character in raw where character != "\n" && character != "\r" {
+        guard result.utf8.count + String(character).utf8.count <= 63 else { break }
+        result.append(character)
+    }
+    return result
+}
+
 extension View {
     /// Общий вид карточек: отступы и полупрозрачная подложка.
     func cardStyle() -> some View {

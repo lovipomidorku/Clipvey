@@ -81,7 +81,7 @@ struct MainView: View {
                     Label {
                         Text("\(L("Последняя синхронизация", "Last sync")): \(lastSync)")
                     } icon: {
-                        Image(systemName: "arrow.left.arrow.right")
+                        Image(systemName: model.lastSyncKind == .image ? "photo" : "arrow.left.arrow.right")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -135,21 +135,13 @@ private struct DeviceRow: View {
     let node: ClipveyNode
     let device: ClipveyNode.DeviceStatus
     @Environment(AppModel.self) private var model
+    @FocusState private var aliasFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(indicatorColor)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(device.name)
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
+                DeviceSummary(device: device, imagesEnabled: model.imagesEnabled)
+                Spacer(minLength: 4)
                 Toggle(L("Синхронизация", "Sync"), isOn: Binding(
                     get: { device.enabled },
                     set: { node.setEnabled($0, deviceID: device.id) }
@@ -160,13 +152,19 @@ private struct DeviceRow: View {
                 .help(device.enabled
                       ? L("Выключить синхронизацию с этим устройством", "Turn off sync with this device")
                       : L("Включить синхронизацию", "Turn on sync"))
-                Button {
-                    model.confirmUnpairID = device.id
+                Menu {
+                    actions
                 } label: {
-                    Image(systemName: "xmark.circle")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .buttonStyle(.borderless)
-                .help(L("Разорвать связь", "Unpair"))
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(L("Переименовать или разорвать связь", "Rename or unpair"))
+            }
+            .contextMenu { actions }
+            if model.renamingDeviceID == device.id {
+                renameEditor
             }
             if model.confirmUnpairID == device.id {
                 HStack {
@@ -186,16 +184,50 @@ private struct DeviceRow: View {
         }
     }
 
-    private var indicatorColor: Color {
-        if device.connected { return .green }
-        if !device.enabled { return .gray.opacity(0.5) }
-        return device.problem == nil ? .gray : .orange
+    @ViewBuilder
+    private var actions: some View {
+        Button(L("Переименовать…", "Rename…")) {
+            model.beginRename(device)
+            aliasFocused = true
+        }
+        if device.alias != nil {
+            Button(L("Вернуть имя «\(device.name)»", "Restore Name “\(device.name)”")) {
+                model.resetAlias(for: device)
+            }
+        }
+        Divider()
+        Button(L("Разорвать связь…", "Unpair…")) {
+            model.confirmUnpairID = device.id
+        }
     }
 
-    private var statusText: String {
-        if !device.enabled { return L("Синхронизация выключена", "Sync is off") }
-        if device.connected { return L("Подключено", "Connected") }
-        return device.problem?.text ?? L("Не в сети", "Offline")
+    /// Поле псевдонима: Enter — сохранить, Esc — отменить. Псевдоним виден только на этом Mac.
+    private var renameEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField(device.name, text: Binding(
+                get: { model.aliasInput },
+                set: { model.aliasInput = limitedNameInput($0) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .focused($aliasFocused)
+            .onSubmit { model.commitAlias(for: device) }
+            .onExitCommand { model.renamingDeviceID = nil }
+            .onAppear { aliasFocused = true }
+            Text(L("Это имя видно только на этом Mac.", "This name is only shown on this Mac."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                if device.alias != nil {
+                    Button(L("Сбросить", "Reset")) { model.resetAlias(for: device) }
+                        .help(L("Вернуть имя, которое сообщает устройство: \(device.name)",
+                                "Use the name the device reports: \(device.name)"))
+                }
+                Button(L("Отмена", "Cancel")) { model.renamingDeviceID = nil }
+                Button(L("Сохранить", "Save")) { model.commitAlias(for: device) }
+            }
+            .controlSize(.small)
+        }
     }
 }
 
@@ -227,9 +259,13 @@ private struct PairingSection: View {
     }
 
     /// Общая рамка связывания: заголовок с обратным отсчётом, шаги 1–2–3 и содержимое шага.
-    private func pairingCard<Content: View>(title: String, step: Int, showsCountdown: Bool = true, @ViewBuilder content: () -> Content) -> some View {
+    private func pairingCard<Content: View>(title: String, step: Int, peerType: DeviceType? = nil, showsCountdown: Bool = true,
+                                            @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center, spacing: 6) {
+                if let peerType {
+                    DeviceIcon(type: peerType)
+                }
                 SectionHeader(title: title)
                 Spacer()
                 if showsCountdown, let deadline = node.pairingDeadline {
@@ -246,6 +282,7 @@ private struct PairingSection: View {
     private func incomingView(_ incoming: ClipveyNode.IncomingPairing) -> some View {
         pairingCard(title: L("Связывание с «\(incoming.peerName)»", "Pairing with “\(incoming.peerName)”"),
                     step: incoming.verified ? 3 : 2,
+                    peerType: incoming.peerType,
                     showsCountdown: incoming.code == nil) {
             if let code = incoming.code {
                 CodeBlock(code: code, deadline: node.pairingDeadline)
@@ -317,8 +354,10 @@ private struct PairingSection: View {
                 progress(L("Поиск устройств…", "Looking for devices…"))
             } else {
                 ForEach(node.candidates) { candidate in
-                    HStack {
+                    HStack(spacing: 8) {
+                        DeviceIcon(type: candidate.type)
                         Text(candidate.name)
+                            .lineLimit(1)
                         Spacer()
                         Button(L("Связать", "Pair")) {
                             model.codeInput = ""
@@ -372,6 +411,19 @@ struct SettingsView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
+            DeviceNameField()
+                .cardStyle()
+
+            VStack(alignment: .leading, spacing: 4) {
+                SettingsToggle(title: L("Передавать картинки", "Sync images"), isOn: $model.imagesEnabled)
+                Text(L("До 20 МБ. Только на устройства, где передача картинок тоже включена.",
+                       "Up to 20 MB. Only to devices that have image sync turned on too."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .cardStyle()
+
             VStack(alignment: .leading, spacing: 8) {
                 SettingsToggle(title: L("Запускать при входе в систему", "Open at login"), isOn: Binding(
                     get: { launchAtLogin.isEnabled },
@@ -406,5 +458,35 @@ struct SettingsView: View {
             }
         }
         .onAppear { launchAtLogin.refresh() }
+    }
+}
+
+/// «Имя этого Mac»: сохраняется по Enter, при потере фокуса и при уходе со страницы.
+/// Пустое поле — имя компьютера (оно же подсказка в поле).
+private struct DeviceNameField: View {
+    @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L("Имя этого Mac", "This Mac’s name"))
+            TextField(AppInfo.deviceName, text: Binding(
+                get: { model.nameInput },
+                set: { model.nameInput = limitedNameInput($0) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .focused($focused)
+            .onSubmit { model.commitNameInput() }
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { model.commitNameInput() }
+            }
+            Text(L("Так этот Mac видят другие устройства. Если оставить пустым — имя компьютера.",
+                   "Other devices see this Mac by this name. Leave empty to use the computer name."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { model.loadNameInput() }
+        .onDisappear { model.commitNameInput() }
     }
 }
