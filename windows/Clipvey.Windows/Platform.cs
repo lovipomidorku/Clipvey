@@ -105,4 +105,57 @@ internal static class AppIcon
         using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("Clipvey.ico");
         return stream is null ? SystemIcons.Application : new Icon(stream, size);
     }
+
+    /// Картинка значка не меньше side пикселей (если есть). Внутри Clipvey.ico — PNG 16…256 px:
+    /// берём PNG напрямую, чтобы не зависеть от того, как Icon.ToBitmap обходится с PNG-кадрами.
+    public static Bitmap LoadBitmap(int side)
+    {
+        try
+        {
+            using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("Clipvey.ico");
+            if (stream is not null)
+            {
+                using var memory = new MemoryStream();
+                stream.CopyTo(memory);
+                if (BestPng(memory.ToArray(), side) is { } png)
+                {
+                    // Копия, чтобы картинка не зависела от потока (GDI+ читает поток лениво).
+                    using var pngStream = new MemoryStream(png);
+                    using var decoded = new Bitmap(pngStream);
+                    return new Bitmap(decoded);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Write($"Не удалось прочитать Clipvey.ico: {e.Message}");
+        }
+        using var icon = Load(new Size(side, side));
+        return icon.ToBitmap();
+    }
+
+    private static byte[]? BestPng(byte[] ico, int side)
+    {
+        if (ico.Length < 6 || BitConverter.ToUInt16(ico, 2) != 1)
+            return null;
+        var count = BitConverter.ToUInt16(ico, 4);
+        (int Side, int Offset, int Length)? best = null;
+        for (var i = 0; i < count; i++)
+        {
+            var entry = 6 + i * 16;
+            if (entry + 16 > ico.Length)
+                break;
+            var entrySide = ico[entry] == 0 ? 256 : ico[entry];
+            var length = BitConverter.ToInt32(ico, entry + 8);
+            var offset = BitConverter.ToInt32(ico, entry + 12);
+            if (offset < 0 || length < 8 || offset + length > ico.Length || ico[offset] != 0x89 || ico[offset + 1] != (byte)'P')
+                continue;
+            // Наименьший кадр не меньше нужного; если такого нет — наибольший.
+            var better = best is not { } current
+                || (entrySide >= side ? current.Side < side || entrySide < current.Side : entrySide > current.Side && current.Side < side);
+            if (better)
+                best = (entrySide, offset, length);
+        }
+        return best is { } found ? ico.AsSpan(found.Offset, found.Length).ToArray() : null;
+    }
 }

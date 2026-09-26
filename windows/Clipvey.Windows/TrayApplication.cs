@@ -12,6 +12,8 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ClipveyNode _node;
     private readonly ClipboardWatcher _watcher;
     private readonly NotifyIcon _tray;
+    private readonly TrayIcons _icons = new();
+    private TrayState? _trayState;
     private readonly SynchronizationContext _ui;
     private ToolStripMenuItem? _statusItem;
     private MainForm? _form;
@@ -25,7 +27,7 @@ internal sealed class TrayApplication : ApplicationContext
 
         _tray = new NotifyIcon
         {
-            Icon = AppIcon.Load(SystemInformation.SmallIconSize),
+            Icon = _icons.Get(TrayState.Idle),
             Text = "Clipvey",
             Visible = true,
         };
@@ -133,9 +135,26 @@ internal sealed class TrayApplication : ApplicationContext
             : L($"Подключено {connected} из {devices.Count}", $"{connected} of {devices.Count} connected");
         if (_statusItem is not null)
             _statusItem.Text = $"Clipvey — {status}";
+        if (devices.Count > 0 && devices.All(device => !device.Enabled))
+            status = L("Синхронизация выключена", "Sync is off");
+        UpdateTrayIcon(connected > 0 ? TrayState.Connected
+            : devices.Count > 0 && devices.All(device => !device.Enabled) ? TrayState.AllDisabled
+            : TrayState.Idle);
         var tip = $"Clipvey: {status}";
         _tray.Text = tip.Length <= MaxTrayText ? tip : tip[..(MaxTrayText - 1)] + "…";
         _form?.RefreshContent();
+    }
+
+    private void UpdateTrayIcon(TrayState state)
+    {
+        var icon = _icons.Get(state);
+        if (_trayState == state && ReferenceEquals(_tray.Icon, icon))
+            return;
+        if (_trayState != state)
+            Log.Write($"Значок трея: {state}");
+        _trayState = state;
+        _tray.Icon = icon;
+        _icons.ReleaseStale();
     }
 
     private void ShowForm()
@@ -152,6 +171,8 @@ internal sealed class TrayApplication : ApplicationContext
     {
         Localization.Changed -= OnLanguageChanged;
         _tray.Visible = false;
+        _tray.Dispose();
+        _icons.Dispose();
         _watcher.Dispose();
         _form?.Dispose();
         try
