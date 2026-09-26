@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Приложение для Windows: значок в трее, окно устройств, синхронизация буфера обмена.
+       Собирается на Mac: dotnet publish Clipvey.Windows -c Release → один Clipvey.exe без установки .NET. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>Clipvey</AssemblyName>
+    <RootNamespace>Clipvey.Windows</RootNamespace>
+    <ApplicationIcon>Clipvey.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Version>0.1.0</Version>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Clipvey.Core\Clipvey.Core.csproj" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.*" />
+    <EmbeddedResource Include="Clipvey.ico" LogicalName="Clipvey.ico" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Протокол, криптография и поиск Mac. Без зависимостей от Windows: проверяется на Mac через Clipvey.Peer. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,57 @@
+import Foundation
+import IOKit.pwr_mgt
+import os
+
+/// Журнал. Смотреть: log stream --predicate 'subsystem == "local.clipvey"' --level info
+enum Log {
+    static let subsystem = "local.clipvey"
+    static let app = Logger(subsystem: subsystem, category: "app")
+    static let network = Logger(subsystem: subsystem, category: "network")
+    static let clipboard = Logger(subsystem: subsystem, category: "clipboard")
+}
+
+enum AppInfo {
+    static var displayName: String {
+        let info = Bundle.main.infoDictionary
+        return info?["CFBundleDisplayName"] as? String ?? info?["CFBundleName"] as? String ?? "Clipvey"
+    }
+
+    /// Запущено ли из .app (автозапуск работает только так).
+    static var isBundled: Bool { Bundle.main.bundleIdentifier != nil }
+
+    /// Имя этого Mac, как его видят другие устройства.
+    static var deviceName: String {
+        Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }
+}
+
+/// Не даёт Mac засыпать от бездействия, пока активен (например, пока подключены другие устройства).
+@MainActor
+final class SleepGuard {
+    private var assertionID: IOPMAssertionID = 0
+    private(set) var isActive = false
+
+    func setActive(_ active: Bool, reason: String) {
+        if active && !isActive {
+            let result = IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                reason as CFString,
+                &assertionID)
+            isActive = result == kIOReturnSuccess
+            Log.app.info("Запрет сна: \(self.isActive ? "включён" : "не удалось включить", privacy: .public)")
+        } else if !active && isActive {
+            IOPMAssertionRelease(assertionID)
+            isActive = false
+            Log.app.info("Запрет сна снят")
+        }
+    }
+}
+
+/// Настройки приложения в UserDefaults.
+enum Settings {
+    static var keepAwake: Bool {
+        get { UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "keepAwake") }
+    }
+}
