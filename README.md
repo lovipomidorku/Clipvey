@@ -47,6 +47,12 @@ What is not synced:
 - Only paired devices can connect.
 - Details: `docs/protocol.md` (in Russian).
 
+<!-- Support: fill in the link and remove this comment.
+## Support
+
+Clipvey is free. If it is useful to you, you can support its development: LINK
+-->
+
 ## License
 
 All rights reserved: you may read the code and build it for yourself, but not redistribute it or publish modified versions. Official builds are free. See [LICENSE](LICENSE).
