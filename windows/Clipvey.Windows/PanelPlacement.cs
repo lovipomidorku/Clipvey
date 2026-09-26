@@ -9,11 +9,10 @@ internal static class PanelPlacement
     /// Отступ панели от края рабочей области (в пикселях при 96 DPI).
     private const int Margin = 12;
 
-    /// Левый верхний угол панели размера size у панели задач на экране под курсором.
-    public static Point Locate(Size size, int dpi)
+    /// Левый верхний угол панели размера size у панели задач на экране screen.
+    public static Point Locate(Size size, int dpi, Screen screen)
     {
         var margin = Margin * dpi / 96;
-        var screen = Screen.FromPoint(Cursor.Position);
         var area = screen.WorkingArea;
         var edge = TaskbarEdge(screen, ref area);
 

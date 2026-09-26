@@ -85,19 +85,21 @@ internal sealed class TrayApplication : ApplicationContext
         foreach (var (value, title) in LanguageChoices())
         {
             var item = new ToolStripMenuItem(title) { Checked = Setting == value };
-            item.Click += (_, _) => Localization.Set(value);
+            // Смена языка пересобирает это меню — откладываем её, пока меню обрабатывает клик.
+            item.Click += (_, _) => OnUi(() => Localization.Set(value));
             language.DropDownItems.Add(item);
         }
 
         var menu = new ContextMenuStrip { Renderer = new ThemedMenuRenderer(Theme.Current) };
         menu.Items.Add(_statusItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(L("Открыть Clipvey", "Open Clipvey"), null, (_, _) => ShowForm());
-        menu.Items.Add(L("Связать новое устройство", "Pair a new device"), null, (_, _) =>
+        // Панель открываем после закрытия меню: иначе меню, закрываясь, вернёт фокус значку и панель сразу спрячется.
+        menu.Items.Add(L("Открыть Clipvey", "Open Clipvey"), null, (_, _) => OnUi(ShowForm));
+        menu.Items.Add(L("Связать новое устройство", "Pair a new device"), null, (_, _) => OnUi(() =>
         {
             _node.StartPairingMode();
             ShowForm();
-        });
+        }));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(autostart);
         menu.Items.Add(language);
@@ -108,7 +110,8 @@ internal sealed class TrayApplication : ApplicationContext
         menu.Opening += (_, _) => autostart.Checked = Autostart.IsEnabled;
 
         _tray.ContextMenuStrip = menu;
-        old?.Dispose();
+        if (old is not null)
+            OnUi(old.Dispose);
     }
 
     /// Варианты настройки «Язык». Названия языков пишутся на самих языках.

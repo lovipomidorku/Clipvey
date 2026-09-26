@@ -21,7 +21,7 @@ internal sealed class TrayPanel : Form
 
     private readonly ClipveyNode _node;
     private readonly FlowLayoutPanel _root;
-    private readonly TextBox _codeBox = new() { MaxLength = 6, BorderStyle = BorderStyle.FixedSingle, TextAlign = HorizontalAlignment.Center };
+    private readonly TextBox _codeBox = new() { Name = "code", MaxLength = 6, BorderStyle = BorderStyle.FixedSingle, TextAlign = HorizontalAlignment.Center };
     private string _result = "";
 
     // Исходящее связывание (роль I): этот компьютер вводит код с экрана другого устройства.
@@ -84,8 +84,14 @@ internal sealed class TrayPanel : Form
 
     private static Palette P => Theme.Current;
 
+    /// Экран, на котором открыта панель. При изменении размера панель остаётся на нём,
+    /// даже если курсор уже на другом мониторе.
+    private Screen? _screen;
+
     /// DPI монитора, на котором стоит (или встанет) панель. По нему считаются размеры и шрифты.
     private int _dpi;
+
+    private Point Locate() => PanelPlacement.Locate(Size, _dpi, _screen ?? Screen.FromPoint(Cursor.Position));
 
     private int S(int pixels) => pixels * _dpi / 96;
 
@@ -104,11 +110,12 @@ internal sealed class TrayPanel : Form
     public void ShowPanel()
     {
         // Сначала переносим окно на экран у курсора (там может быть другой DPI), потом строим содержимое.
+        _screen = Screen.FromPoint(Cursor.Position);
         _dpi = PanelPlacement.CursorMonitorDpi() ?? DeviceDpi;
-        Location = PanelPlacement.Locate(Size, _dpi);
+        Location = Locate();
         RefreshContent();
         PerformLayout();
-        Location = PanelPlacement.Locate(Size, _dpi);
+        Location = Locate();
         var firstShow = !IsHandleCreated;
         Show();
         // Окно создаётся при первом показе, и WinForms может само подстроить размеры под DPI монитора.
@@ -117,7 +124,7 @@ internal sealed class TrayPanel : Form
         {
             _dpi = DeviceDpi;
             RefreshContent();
-            Location = PanelPlacement.Locate(Size, _dpi);
+            Location = Locate();
         }
         Activate();
         try
@@ -186,7 +193,7 @@ internal sealed class TrayPanel : Form
     {
         base.OnSizeChanged(e);
         if (Visible)
-            Location = PanelPlacement.Locate(Size, _dpi);
+            Location = Locate();
         Invalidate();
     }
 
@@ -196,7 +203,7 @@ internal sealed class TrayPanel : Form
         _dpi = e.DeviceDpiNew;
         RefreshContent();
         if (Visible)
-            Location = PanelPlacement.Locate(Size, _dpi);
+            Location = Locate();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -243,7 +250,11 @@ internal sealed class TrayPanel : Form
         Invalidate(true);
 
         if (focused is { Length: > 0 } && _root.Controls.Find(focused, searchAllChildren: true).FirstOrDefault() is { } restored)
+        {
             restored.Focus();
+            if (restored is TextBox box)
+                box.SelectionStart = box.TextLength;
+        }
     }
 
     private Control? FocusedControl()
