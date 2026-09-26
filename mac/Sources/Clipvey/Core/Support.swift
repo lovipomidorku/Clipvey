@@ -54,4 +54,9 @@ enum Settings {
         get { UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "keepAwake") }
     }
+
+    static var language: AppLanguage {
+        get { UserDefaults.standard.string(forKey: "language").flatMap(AppLanguage.init(rawValue:)) ?? .system }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "language") }
+    }
 }

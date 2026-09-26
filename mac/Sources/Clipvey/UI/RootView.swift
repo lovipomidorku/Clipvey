@@ -32,8 +32,8 @@ struct RootView: View {
                     Image(systemName: "chevron.left")
                 }
                 .buttonStyle(.borderless)
-                .help("Назад")
-                Text("Настройки")
+                .help(L("Назад", "Back"))
+                Text(L("Настройки", "Settings"))
                     .font(.headline)
             } else {
                 Text(AppInfo.displayName)
@@ -47,7 +47,7 @@ struct RootView: View {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .help("Настройки")
+                .help(L("Настройки", "Settings"))
             }
         }
         .padding(.horizontal, 12)
@@ -57,7 +57,7 @@ struct RootView: View {
     private var footer: some View {
         HStack {
             Spacer()
-            Button("Выйти") {
+            Button(L("Выйти", "Quit")) {
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.borderless)
@@ -76,13 +76,23 @@ struct MainView: View {
         if let node = model.node {
             VStack(alignment: .leading, spacing: 12) {
                 DevicesSection(node: node)
+                if let lastSync = model.lastSyncText {
+                    Label {
+                        Text("\(L("Последняя синхронизация", "Last sync")): \(lastSync)")
+                    } icon: {
+                        Image(systemName: "arrow.left.arrow.right")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 PairingSection(node: node)
                 if model.bridge.needsAccessPermission && node.devices.contains(where: \.enabled) {
                     AccessHint()
                 }
             }
         } else {
-            Text(model.startupError ?? "Не удалось запуститься")
+            Text(model.startupError.map { L("Не удалось загрузить ключ устройства: \($0)", "Couldn’t load the device key: \($0)") }
+                 ?? L("Не удалось запуститься", "Couldn’t start"))
                 .foregroundStyle(.red)
         }
     }
@@ -96,7 +106,8 @@ private struct DevicesSection: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader(title: summary)
             if node.devices.isEmpty {
-                Text("Свяжите этот Mac с другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.")
+                Text(L("Свяжите этот Mac с другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.",
+                       "Pair this Mac with another computer to copy text on one and paste it on the other."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -113,9 +124,9 @@ private struct DevicesSection: View {
 
     private var summary: String {
         let total = node.devices.count
-        guard total > 0 else { return "Устройства" }
+        guard total > 0 else { return L("Устройства", "Devices") }
         let connected = node.devices.filter(\.connected).count
-        return "Устройства: подключено \(connected) из \(total)"
+        return L("Устройства: подключено \(connected) из \(total)", "Devices: \(connected) of \(total) connected")
     }
 }
 
@@ -138,32 +149,34 @@ private struct DeviceRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Toggle("Синхронизация", isOn: Binding(
+                Toggle(L("Синхронизация", "Sync"), isOn: Binding(
                     get: { device.enabled },
                     set: { node.setEnabled($0, deviceID: device.id) }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
-                .help(device.enabled ? "Выключить синхронизацию с этим устройством" : "Включить синхронизацию")
+                .help(device.enabled
+                      ? L("Выключить синхронизацию с этим устройством", "Turn off sync with this device")
+                      : L("Включить синхронизацию", "Turn on sync"))
                 Button {
                     model.confirmUnpairID = device.id
                 } label: {
                     Image(systemName: "xmark.circle")
                 }
                 .buttonStyle(.borderless)
-                .help("Разорвать связь")
+                .help(L("Разорвать связь", "Unpair"))
             }
             if model.confirmUnpairID == device.id {
                 HStack {
-                    Text("Разорвать связь?")
+                    Text(L("Разорвать связь?", "Unpair this device?"))
                         .font(.caption)
                     Spacer()
-                    Button("Разорвать") {
+                    Button(L("Разорвать", "Unpair")) {
                         node.unpair(deviceID: device.id)
                         model.confirmUnpairID = nil
                     }
-                    Button("Нет") {
+                    Button(L("Нет", "Cancel")) {
                         model.confirmUnpairID = nil
                     }
                 }
@@ -179,9 +192,9 @@ private struct DeviceRow: View {
     }
 
     private var statusText: String {
-        if !device.enabled { return "Синхронизация выключена" }
-        if device.connected { return "Подключено" }
-        return device.problem ?? "Не в сети"
+        if !device.enabled { return L("Синхронизация выключена", "Sync is off") }
+        if device.connected { return L("Подключено", "Connected") }
+        return device.problem ?? L("Не в сети", "Offline")
     }
 }
 
@@ -198,7 +211,7 @@ private struct PairingSection: View {
             } else if node.isPairingMode {
                 pairingModeView
             } else {
-                Button("Связать новое устройство") {
+                Button(L("Связать новое устройство", "Pair New Device…")) {
                     model.codeInput = ""
                     node.startPairingMode()
                 }
@@ -212,89 +225,116 @@ private struct PairingSection: View {
         }
     }
 
+    /// Общая рамка связывания: заголовок с обратным отсчётом, шаги 1–2–3 и содержимое шага.
+    private func pairingCard<Content: View>(title: String, step: Int, showsCountdown: Bool = true, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionHeader(title: title)
+                Spacer()
+                if showsCountdown, let deadline = node.pairingDeadline {
+                    PairingCountdown(deadline: deadline, style: .remaining)
+                }
+            }
+            PairingSteps(current: step)
+            content()
+        }
+        .cardStyle()
+    }
+
     /// Роль R: этот Mac показывает код.
     private func incomingView(_ incoming: ClipveyNode.IncomingPairing) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Связывание с «\(incoming.peerName)»")
+        pairingCard(title: L("Связывание с «\(incoming.peerName)»", "Pairing with “\(incoming.peerName)”"),
+                    step: incoming.verified ? 3 : 2,
+                    showsCountdown: incoming.code == nil) {
             if let code = incoming.code {
-                Text(Self.formatted(code))
-                    .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity)
+                CodeBlock(code: code, deadline: node.pairingDeadline)
+            } else {
+                progress(L("Подключение…", "Connecting…"))
             }
             Text(incoming.verified
-                 ? "«\(incoming.peerName)» подтвердил код ✓ Нажмите «Готово»."
-                 : "Введите этот код на «\(incoming.peerName)».")
+                 ? L("«\(incoming.peerName)» подтвердил код ✓ Нажмите «Готово».", "“\(incoming.peerName)” confirmed the code ✓ Click Done.")
+                 : L("Введите этот код на «\(incoming.peerName)».", "Enter this code on “\(incoming.peerName)”."))
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("Готово") { node.confirmIncoming() }
+                Button(L("Готово", "Done")) { node.confirmIncoming() }
                     .disabled(!incoming.verified)
                     .keyboardShortcut(.defaultAction)
-                Button("Отмена") { node.cancelIncoming() }
+                Button(L("Отмена", "Cancel")) { node.cancelIncoming() }
             }
         }
-        .cardStyle()
     }
 
     /// Роль I: пользователь вводит код с экрана другого устройства.
-    @ViewBuilder
     private func outgoingView(_ outgoing: ClipveyNode.OutgoingPairing) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let name: String
+        let step: Int
+        switch outgoing {
+        case .connecting(let peer), .enterCode(let peer):
+            name = peer
+            step = 2
+        case .waitingConfirmation(let peer):
+            name = peer
+            step = 3
+        }
+        return pairingCard(title: L("Связывание с «\(name)»", "Pairing with “\(name)”"), step: step) {
             switch outgoing {
-            case .connecting(let name):
-                SectionHeader(title: "Связывание с «\(name)»")
-                Text("Подключение…").font(.callout)
-            case .enterCode(let name):
-                SectionHeader(title: "Связывание с «\(name)»")
-                Text("Введите код с экрана «\(name)»:").font(.callout)
+            case .connecting:
+                progress(L("Подключение…", "Connecting…"))
+            case .enterCode:
+                Text(L("Введите код с экрана «\(name)»:", "Enter the code shown on “\(name)”:"))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    TextField("000000", text: Binding(
+                    TextField("000 000", text: Binding(
                         get: { model.codeInput },
                         set: { model.codeInput = String($0.filter { $0.isASCII && $0.isNumber }.prefix(6)) }
                     ))
-                    .font(.system(size: 20, design: .monospaced))
-                    .frame(width: 110)
+                    .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                    .frame(width: 130)
                     .onSubmit(submit)
-                    Button("Подтвердить", action: submit)
+                    Button(L("Подтвердить", "Confirm"), action: submit)
                         .disabled(model.codeInput.count != 6)
                         .keyboardShortcut(.defaultAction)
                 }
-            case .waitingConfirmation(let name):
-                SectionHeader(title: "Связывание с «\(name)»")
-                Text("Код верный ✓ Нажмите «Готово» на «\(name)».").font(.callout)
+            case .waitingConfirmation:
+                Text(L("Код верный ✓ Нажмите «Готово» на «\(name)».", "Code is correct ✓ Click Done on “\(name)”."))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Button("Отмена") { node.cancelOutgoing() }
+            Button(L("Отмена", "Cancel")) { node.cancelOutgoing() }
         }
-        .cardStyle()
     }
 
     private var pairingModeView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Режим связывания")
-            Text("Нажмите «Связать» и на другом компьютере. Затем выберите его здесь или этот Mac — там.")
+        pairingCard(title: L("Режим связывания", "Pairing"), step: node.candidates.isEmpty ? 1 : 2) {
+            Text(L("Нажмите «Связать» и на другом компьютере. Затем выберите его здесь или этот Mac — там.",
+                    "Click Pair on the other computer too. Then choose it here, or choose this Mac there."))
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
             if node.candidates.isEmpty {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Поиск устройств…").font(.callout).foregroundStyle(.secondary)
-                }
+                progress(L("Поиск устройств…", "Looking for devices…"))
             } else {
                 ForEach(node.candidates) { candidate in
                     HStack {
                         Text(candidate.name)
                         Spacer()
-                        Button("Связать") {
+                        Button(L("Связать", "Pair")) {
                             model.codeInput = ""
                             node.pair(with: candidate)
                         }
                     }
                 }
             }
-            Button("Закрыть") { node.stopPairingMode() }
+            Button(L("Закрыть", "Close")) { node.stopPairingMode() }
         }
-        .cardStyle()
+    }
+
+    private func progress(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(text).font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     private func submit() {
@@ -302,20 +342,17 @@ private struct PairingSection: View {
         node.submitCode(model.codeInput)
         model.codeInput = ""
     }
-
-    private static func formatted(_ code: String) -> String {
-        "\(code.prefix(3)) \(code.suffix(3))"
-    }
 }
 
 private struct AccessHint: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("macOS спрашивает разрешение, когда программа читает буфер обмена. Чтобы вопрос не появлялся при каждом копировании, выберите для Clipvey «Всегда разрешать» в Системных настройках → «Конфиденциальность и безопасность».")
+            Text(L("macOS спрашивает разрешение, когда программа читает буфер обмена. Чтобы вопрос не появлялся при каждом копировании, выберите для Clipvey «Всегда разрешать» в Системных настройках → «Конфиденциальность и безопасность».",
+                    "macOS asks for permission when an app reads the clipboard. To stop the prompt on every copy, choose Always Allow for Clipvey in System Settings → Privacy & Security."))
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Открыть настройки конфиденциальности") {
+            Button(L("Открыть настройки конфиденциальности", "Open Privacy Settings")) {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension") {
                     NSWorkspace.shared.open(url)
                 }
@@ -335,29 +372,30 @@ struct SettingsView: View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 8) {
-                SettingsToggle(title: "Запускать при входе в систему", isOn: Binding(
+                SettingsToggle(title: L("Запускать при входе в систему", "Open at login"), isOn: Binding(
                     get: { launchAtLogin.isEnabled },
                     set: { launchAtLogin.setEnabled($0) }
                 ))
                 .disabled(!launchAtLogin.isAvailable)
                 if launchAtLogin.requiresApproval {
-                    Text("Нужно разрешить в Системных настройках → Основные → Объекты входа.")
+                    Text(L("Нужно разрешить в Системных настройках → Основные → Объекты входа.", "Allow it in System Settings → General → Login Items."))
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
                 if let error = launchAtLogin.lastError {
-                    Text("Не удалось изменить автозапуск: \(error)")
+                    Text(L("Не удалось изменить автозапуск: \(error)", "Couldn’t change the login item: \(error)"))
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                SettingsToggle(title: "Не давать Mac засыпать, пока подключены устройства", isOn: $model.keepAwake)
+                SettingsToggle(title: L("Не давать Mac засыпать, пока подключены устройства", "Keep Mac awake while devices are connected"), isOn: $model.keepAwake)
+                LanguagePicker()
             }
             .cardStyle()
 
             if let node = model.node {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Этот Mac: \(node.name)")
-                    Text("ID: \(node.identity.deviceID.prefix(8))…  Порт: \(node.port.map(String.init) ?? "—")")
+                    Text(L("Этот Mac: \(node.name)", "This Mac: \(node.name)"))
+                    Text("ID: \(node.identity.deviceID.prefix(8))…  \(L("Порт", "Port")): \(node.port.map(String.init) ?? "—")")
                         .foregroundStyle(.secondary)
                 }
                 .font(.caption)

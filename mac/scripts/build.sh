@@ -59,7 +59,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>
     <string>$(date +%Y%m%d%H%M)</string>
     <key>CFBundleDevelopmentRegion</key>
-    <string>ru</string>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ru</string>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
@@ -67,7 +72,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Clipvey находит ваши компьютеры в локальной сети и синхронизирует с ними буфер обмена.</string>
+    <string>Clipvey finds your computers on the local network and syncs the clipboard with them.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_clipvey._tcp</string>
@@ -76,6 +81,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Переводы строк Info.plist (вопрос о доступе к локальной сети). Интерфейс переводится
+# в коде (L("…", "…")), а эти файлы нужны, чтобы macOS показала вопрос на языке пользователя.
+mkdir -p "$APP/Contents/Resources/en.lproj" "$APP/Contents/Resources/ru.lproj"
+cat > "$APP/Contents/Resources/en.lproj/InfoPlist.strings" <<'STRINGS'
+"NSLocalNetworkUsageDescription" = "Clipvey finds your computers on the local network and syncs the clipboard with them.";
+STRINGS
+cat > "$APP/Contents/Resources/ru.lproj/InfoPlist.strings" <<'STRINGS'
+"NSLocalNetworkUsageDescription" = "Clipvey находит ваши компьютеры в локальной сети и синхронизирует с ними буфер обмена.";
+STRINGS
 
 codesign --force --sign - "$APP"
 echo "Собрано: $APP"
