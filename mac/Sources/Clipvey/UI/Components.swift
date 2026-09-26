@@ -146,13 +146,14 @@ struct CodeBlock: View {
 
 extension DeviceType {
     /// Значок SF Symbols по os и form (docs/protocol.md, «Тип устройства»).
-    /// Незнакомое или отсутствующее значение — общий значок монитора.
+    /// Незнакомое или отсутствующее значение (например, у версии 0.1.0) — общий значок сетевого устройства:
+    /// монитор (display) неотличим от desktopcomputer.
     var symbolName: String {
         if form == "laptop" { return "laptopcomputer" }
         switch os {
         case "mac": return "desktopcomputer"
         case "windows", "linux": return "pc"
-        default: return "display"
+        default: return "rectangle.connected.to.line.below"
         }
     }
 }

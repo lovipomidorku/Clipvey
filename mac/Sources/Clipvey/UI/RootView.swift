@@ -262,7 +262,8 @@ private struct PairingSection: View {
     private func pairingCard<Content: View>(title: String, step: Int, peerType: DeviceType? = nil, showsCountdown: Bool = true,
                                             @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 6) {
+            // Со значком — по центру (у картинки нет базовой линии текста), без него — по базовой линии, как раньше.
+            HStack(alignment: peerType == nil ? .firstTextBaseline : .center, spacing: 6) {
                 if let peerType {
                     DeviceIcon(type: peerType)
                 }
