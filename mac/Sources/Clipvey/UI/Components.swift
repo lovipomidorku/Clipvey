@@ -150,3 +150,36 @@ extension View {
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
 }
+
+// MARK: - Тексты для кодов узла
+
+extension FailureReason {
+    /// Причина неудачи на языке интерфейса (узел отдаёт только код).
+    @MainActor var text: String {
+        switch self {
+        case .notPairing: L("На другом устройстве не открыт режим связывания", "Pairing isn’t open on the other device")
+        case .busy: L("Другое устройство уже связывается с кем-то", "The other device is already pairing with someone")
+        case .peerCodeMismatch: L("На другом устройстве введён неверный код", "A wrong code was entered on the other device")
+        case .peerCancelled: L("Связывание отменено на другом устройстве", "Pairing was cancelled on the other device")
+        case .commitMismatch: L("Проверка связывания не прошла — возможно, соединение перехвачено", "Pairing check failed — the connection may be intercepted")
+        case .unknownDevice: L("Другое устройство не знает этот Mac — свяжите заново", "The other device doesn’t know this Mac — pair again")
+        case .disabled: L("На другом устройстве синхронизация с этим Mac выключена", "The other device has sync with this Mac turned off")
+        case .rejected(let reason): L("Другое устройство отказало: \(reason)", "The other device refused: \(reason)")
+        case .codeMismatch: L("Код не совпал", "The code doesn’t match")
+        case .cancelled: L("Связывание отменено", "Pairing cancelled")
+        case .wrongDevice: L("По адресу ответило другое устройство", "A different device answered at this address")
+        case .connectionFailed: L("Нет соединения", "Couldn’t connect")
+        case .protocolError: L("Ошибка обмена с другим устройством", "Communication error with the other device")
+        }
+    }
+}
+
+extension ClipveyNode.PairingResult {
+    /// Итог связывания на языке интерфейса.
+    @MainActor var text: String {
+        switch self {
+        case .paired(let name): L("Связано с «\(name)»", "Paired with “\(name)”")
+        case .failed(let reason): reason.text
+        }
+    }
+}

@@ -3,15 +3,19 @@ using System.Text.Json.Nodes;
 
 namespace Clipvey.Core;
 
-/// Установленный сеанс. InitiatorId нужен, чтобы решить, какой из двух одновременных сеансов оставить.
-public sealed record SessionInfo(SecureChannel Channel, PairedDevice Peer, string PeerName, string InitiatorId);
+/// Установленный сеанс. Remote — ready другой стороны (имя, тип, caps).
+/// InitiatorId нужен, чтобы решить, какой из двух одновременных сеансов оставить.
+public sealed record SessionInfo(SecureChannel Channel, PairedDevice Peer, PeerInfo Remote, string InitiatorId)
+{
+    public string PeerName => string.IsNullOrEmpty(Remote.Name) ? Peer.Name : Remote.Name;
+}
 
 /// Рукопожатие сеанса по docs/protocol.md.
 public static class Session
 {
     /// Сторона I. Соединение уже установлено; при ошибке его закрывает вызывающий.
     public static async Task<SessionInfo> InitiateAsync(
-        TcpClient tcp, Identity identity, PairedDevice peer, string ownName, CancellationToken cancellationToken)
+        TcpClient tcp, Identity identity, PairedDevice peer, PeerInfo own, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(Protocol.HandshakeTimeout);
@@ -30,7 +34,7 @@ public static class Session
 
         var ack = Messages.Expect(await Pairing.Receive(stream, ct), "hello_ack");
         if (Messages.String(ack, "id") != peer.DeviceId)
-            throw new ProtocolException("Ответило не то устройство, с которым было связывание");
+            throw new WrongDeviceException();
         var peerEphemeral = Messages.Bytes(ack, "eph", P256.PublicKeyLength);
 
         using var peerStatic = P256.ImportPublicKey(peer.PublicKey);
@@ -42,8 +46,8 @@ public static class Session
         var (toPeer, fromPeer) = PairingMath.SessionKeys(dh1, dh2, dh3, transcript);
 
         var channel = new SecureChannel(tcp, stream, toPeer, fromPeer);
-        var peerName = await ExchangeReadyAsync(channel, ownName, peer.Name, ct);
-        return new SessionInfo(channel, peer, peerName, identity.DeviceId);
+        var remote = await ExchangeReadyAsync(channel, own, ct);
+        return new SessionInfo(channel, peer, remote, identity.DeviceId);
     }
 
     /// Сторона R. hello уже прочитан. findPeer ищет связанное устройство по deviceId.
@@ -52,7 +56,7 @@ public static class Session
         JsonObject hello,
         Identity identity,
         Func<string, PairedDevice?> findPeer,
-        string ownName,
+        PeerInfo own,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -87,18 +91,17 @@ public static class Session
         var (fromPeer, toPeer) = PairingMath.SessionKeys(dh1, dh2, dh3, transcript);
 
         var channel = new SecureChannel(tcp, stream, toPeer, fromPeer);
-        var peerName = await ExchangeReadyAsync(channel, ownName, peer.Name, ct);
-        return new SessionInfo(channel, peer, peerName, peer.DeviceId);
+        var remote = await ExchangeReadyAsync(channel, own, ct);
+        return new SessionInfo(channel, peer, remote, peer.DeviceId);
     }
 
     /// Обмен ready подтверждает ключи. При ошибке канал (вместе с соединением) закрывается.
-    private static async Task<string> ExchangeReadyAsync(SecureChannel channel, string ownName, string fallbackName, CancellationToken ct)
+    private static async Task<PeerInfo> ExchangeReadyAsync(SecureChannel channel, PeerInfo own, CancellationToken ct)
     {
         try
         {
-            await channel.SendAsync(new JsonObject { ["t"] = "ready", ["name"] = ownName }, ct);
-            var ready = Messages.Expect(await channel.ReceiveAsync(ct), "ready");
-            return ready["name"]?.GetValue<string>() ?? fallbackName;
+            await channel.SendAsync(own.ToMessage("ready"), ct);
+            return PeerInfo.Parse(Messages.Expect(await channel.ReceiveAsync(ct), "ready"));
         }
         catch
         {

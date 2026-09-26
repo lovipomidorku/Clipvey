@@ -69,6 +69,22 @@ public static class Messages
         }
     }
 
+    /// Необязательная строка: нет поля или не строка — null.
+    public static string? OptionalString(JsonObject message, string key) =>
+        message[key] is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+
+    /// Необязательное целое: нет поля, не число или дробное — null.
+    public static long? OptionalInteger(JsonObject message, string key)
+    {
+        if (message[key] is not JsonValue value)
+            return null;
+        if (value.TryGetValue(out long number))
+            return number;
+        if (value.TryGetValue(out int small))
+            return small;
+        return null;
+    }
+
     public static byte[] Bytes(JsonObject message, string key, int expectedLength)
     {
         byte[] value;

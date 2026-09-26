@@ -101,6 +101,24 @@ internal sealed partial class TrayPanel : Form
 
     private int Width96 => S(ContentWidth);
 
+    /// Причина неудачи на языке интерфейса (узел отдаёт только код).
+    public static string FailureText(FailureReason reason) => reason switch
+    {
+        FailureReason.NotPairing => L("На другом устройстве не открыт режим связывания", "Pairing isn’t open on the other device"),
+        FailureReason.Busy => L("Другое устройство уже связывается с кем-то", "The other device is already pairing with someone"),
+        FailureReason.PeerCodeMismatch => L("На другом устройстве введён неверный код", "A wrong code was entered on the other device"),
+        FailureReason.PeerCancelled => L("Связывание отменено на другом устройстве", "Pairing was cancelled on the other device"),
+        FailureReason.CommitMismatch => L("Проверка связывания не прошла — возможно, соединение перехвачено", "Pairing check failed — the connection may be intercepted"),
+        FailureReason.UnknownDevice => L("Другое устройство не знает этот компьютер — свяжите заново", "The other device doesn’t know this PC — pair again"),
+        FailureReason.Disabled => L("На другом устройстве синхронизация с этим компьютером выключена", "The other device has sync with this PC turned off"),
+        FailureReason.Rejected => L("Другое устройство отказало", "The other device refused"),
+        FailureReason.CodeMismatch => L("Код не совпал", "The code doesn’t match"),
+        FailureReason.Cancelled => L("Связывание отменено или истекло время", "Pairing was cancelled or timed out"),
+        FailureReason.WrongDevice => L("По адресу ответило другое устройство", "A different device answered at this address"),
+        FailureReason.ConnectionFailed => L("Нет соединения", "Couldn’t connect"),
+        _ => L("Ошибка обмена с другим устройством", "Communication error with the other device"),
+    };
+
     public void ShowResult(string text)
     {
         _result = text;
@@ -359,7 +377,7 @@ internal sealed partial class TrayPanel : Form
 
         var status = !device.Enabled ? L("синхронизация выключена", "sync is off")
             : device.Connected ? L("подключено", "connected")
-            : device.Problem ?? L("не в сети", "offline");
+            : device.Problem is { } problem ? FailureText(problem) : L("не в сети", "offline");
         var textWidth = CardInnerWidth - S(20 + 6 + 52);
         var texts = NewColumn(P.Card);
         texts.Controls.Add(NewLabel(device.Name, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, textWidth, new Padding(0)));

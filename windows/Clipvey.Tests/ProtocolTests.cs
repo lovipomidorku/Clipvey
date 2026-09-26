@@ -235,7 +235,8 @@ public class MessageTests
     public void DecodeAndEncodeKeepObject(string name)
     {
         var decoded = Messages.Decode(SampleBytes(name));
-        Assert.Equal(name, Messages.Type(decoded));
+        // Варианты с новыми полями записаны под своими именами, их t — в поле "type" образца.
+        Assert.Equal(Sample(name)["type"]?.GetValue<string>() ?? name, Messages.Type(decoded));
         var encoded = Messages.Encode(decoded);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(SampleBytes(name)), JsonNode.Parse(encoded)), Encoding.UTF8.GetString(encoded));
 
@@ -315,6 +316,241 @@ public class MessageTests
         var rejected = Assert.Throws<PeerRejectedException>(() => Messages.Expect(error, "hello_ack"));
         Assert.Equal("disabled", rejected.Reason);
         Assert.Throws<ProtocolException>(() => Messages.Expect(Messages.Decode(SampleBytes("ping")), "ready"));
+    }
+}
+
+/// Новые необязательные поля (тип устройства, info, caps) и картинки: сообщения в том виде,
+/// как их собирает и разбирает ядро, совпадают с образцами tests/vectors.json.
+public class NewFieldTests
+{
+    private static JsonObject SampleMessage(string name) =>
+        JsonNode.Parse(String(Root["messages"]!.AsArray().Single(message => String(message!["name"]) == name)!["json"]))!.AsObject();
+
+    private static JsonObject Parse(string json) => Messages.Decode(Encoding.UTF8.GetBytes(json));
+
+    private static void AssertSameObject(JsonObject expected, JsonObject actual) =>
+        Assert.True(JsonNode.DeepEquals(expected, JsonNode.Parse(Messages.Encode(actual))), Encoding.UTF8.GetString(Messages.Encode(actual)));
+
+    [Fact]
+    public void OldMessagesGiveDefaults()
+    {
+        var ready = PeerInfo.Parse(SampleMessage("ready"));
+        Assert.Equal("Кухня / ноутбук", ready.Name);
+        Assert.Null(ready.Caps);
+        Assert.False(ready.AcceptsImages);
+        Assert.Equal(DeviceType.Unknown, ready.Type);
+        Assert.Equal(DeviceType.Unknown, DeviceType.Parse(SampleMessage("pair_hello")));
+        Assert.Equal(DeviceType.Unknown, DeviceType.Parse(SampleMessage("pair_commit")));
+        var empty = PeerInfo.Parse(Parse("""{"t":"info"}"""));
+        Assert.Null(empty.Name);
+        Assert.Null(empty.Caps);
+        Assert.Equal(DeviceType.Unknown, empty.Type);
+    }
+
+    [Fact]
+    public void ReadyAndInfoRoundTrip()
+    {
+        var full = PeerInfo.Parse(SampleMessage("ready_full"));
+        Assert.Equal("OFFICE-PC", full.Name);
+        Assert.Equal(new DeviceType("windows", "desktop"), full.Type);
+        Assert.Equal(["image"], full.Caps!);
+        Assert.True(full.AcceptsImages);
+        AssertSameObject(SampleMessage("ready_full"), new PeerInfo("OFFICE-PC", new DeviceType("windows", "desktop"), ["image"]).ToMessage("ready"));
+        AssertSameObject(SampleMessage("ready"), new PeerInfo("Кухня / ноутбук", DeviceType.Unknown, null).ToMessage("ready"));
+        AssertSameObject(SampleMessage("info"), new PeerInfo("Кухня / ноутбук", new DeviceType("mac", "laptop"), ["image"]).ToMessage("info"));
+        AssertSameObject(SampleMessage("info_name_only"), new PeerInfo("Новое имя", DeviceType.Unknown, null).ToMessage("info"));
+        AssertSameObject(SampleMessage("info_caps_empty"), new PeerInfo(null, DeviceType.Unknown, []).ToMessage("info"));
+        var capsEmpty = PeerInfo.Parse(SampleMessage("info_caps_empty"));
+        Assert.NotNull(capsEmpty.Caps);
+        Assert.Empty(capsEmpty.Caps);
+        Assert.Null(capsEmpty.Name);
+    }
+
+    [Fact]
+    public void WrongTypesOfOptionalFieldsAreIgnored()
+    {
+        var info = PeerInfo.Parse(Parse("""{"t":"ready","name":5,"os":true,"caps":["image",3]}"""));
+        Assert.Null(info.Name);
+        Assert.Null(info.Type.Os);
+        Assert.Equal(["image"], info.Caps!);
+    }
+
+    [Fact]
+    public void DeviceTypeInPairing()
+    {
+        Assert.Equal(new DeviceType("mac", "laptop"), DeviceType.Parse(SampleMessage("pair_hello_typed")));
+        Assert.Equal(new DeviceType("windows", "desktop"), DeviceType.Parse(SampleMessage("pair_commit_typed")));
+    }
+
+    [Fact]
+    public void BlobMessages()
+    {
+        var sample = SampleMessage("blob_start");
+        var start = BlobStart.Parse(sample);
+        Assert.Equal("image", start.Kind);
+        Assert.Equal("image/png", start.Mime);
+        Assert.Equal(1, start.Hops);
+        Assert.Null(BlobAssembly.Refusal(start));
+        AssertSameObject(sample, start.ToMessage());
+
+        var chunk = SampleMessage("blob_chunk");
+        var data = Blob.ChunkData(chunk)!;
+        Assert.Equal("последний кусок 😀", Encoding.UTF8.GetString(data));
+        AssertSameObject(chunk, Blob.ChunkMessage(Messages.String(chunk, "id"), 2, data));
+        AssertSameObject(SampleMessage("blob_end"), Blob.EndMessage("ffeeddccbbaa99887766554433221100"));
+
+        // Неверный blob_start не рвёт сеанс: разбирается, но картинка отвергается.
+        var bad = BlobStart.Parse(Parse("""{"t":"blob_start","id":"a","origin":"b","hops":0,"kind":"file","mime":"image/gif","size":"big","sha256":"***"}"""));
+        Assert.NotNull(BlobAssembly.Refusal(bad));
+        Assert.Null(Blob.ChunkData(Parse("""{"t":"blob_chunk","id":"a","seq":0,"data":"***"}""")));
+    }
+
+    private static byte[] BlobData()
+    {
+        var length = Section("blob")["length"]!.GetValue<int>();
+        var data = new byte[length];
+        for (var i = 0; i < length; i++)
+            data[i] = (byte)(i % 251);
+        return data;
+    }
+
+    private static BlobStart Header(byte[] data, byte[]? sha = null) =>
+        new("x", "o", 0, "image", "image/png", data.Length, sha ?? SHA256.HashData(data));
+
+    [Fact]
+    public void ChunkingMatchesVectors()
+    {
+        var blob = Section("blob");
+        var data = BlobData();
+        Assert.Equal(String(blob["sha256"]), Convert.ToBase64String(SHA256.HashData(data)));
+        var chunks = Blob.Chunks(data).ToList();
+        Assert.Equal(blob["chunk_sizes"]!.AsArray().Select(size => size!.GetValue<int>()), chunks.Select(chunk => chunk.Length));
+        Assert.Equal(blob["chunk_sha256"]!.AsArray().Select(String), chunks.Select(chunk => ToHex(SHA256.HashData(chunk.Span))));
+        Assert.Equal(524_288, Protocol.BlobChunkBytes);
+        Assert.Equal(20_971_520, Protocol.MaxImageBytes);
+    }
+
+    [Fact]
+    public void AssemblyAcceptsWholeImage()
+    {
+        var data = BlobData();
+        var assembly = new BlobAssembly(Header(data));
+        var seq = 0;
+        foreach (var chunk in Blob.Chunks(data))
+            assembly.Append(seq++, chunk.ToArray());
+        Assert.Equal(data, assembly.Finish());
+    }
+
+    public static TheoryData<string> BadAssemblies => ["пропущен кусок", "нехватка данных", "короткий не последний", "данных больше size", "без данных", "sha256"];
+
+    [Theory]
+    [MemberData(nameof(BadAssemblies))]
+    public void AssemblyRejects(string name)
+    {
+        var data = BlobData();
+        var chunks = Blob.Chunks(data).Select(chunk => chunk.ToArray()).ToList();
+        var assembly = new BlobAssembly(name == "sha256" ? Header(data, new byte[32]) : Header(data));
+        Assert.Throws<ProtocolException>(() =>
+        {
+            switch (name)
+            {
+                case "пропущен кусок":
+                    assembly.Append(0, chunks[0]);
+                    assembly.Append(2, chunks[2]);
+                    break;
+                case "нехватка данных":
+                    assembly.Append(0, chunks[0]);
+                    assembly.Append(1, chunks[1]);
+                    break;
+                case "короткий не последний":
+                    assembly.Append(0, chunks[0][..1000]);
+                    break;
+                case "данных больше size":
+                    for (var i = 0; i < chunks.Count; i++)
+                        assembly.Append(i, chunks[i]);
+                    assembly.Append(chunks.Count, [1]);
+                    break;
+                case "без данных":
+                    assembly.Append(0, null);
+                    break;
+                case "sha256":
+                    for (var i = 0; i < chunks.Count; i++)
+                        assembly.Append(i, chunks[i]);
+                    break;
+            }
+            assembly.Finish();
+        });
+    }
+
+    [Fact]
+    public void RefusedHeaders()
+    {
+        var sha = new byte[32];
+        Assert.NotNull(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "file", "image/png", 10, sha)));
+        Assert.NotNull(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "image", "image/gif", 10, sha)));
+        Assert.NotNull(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "image", "image/png", 0, sha)));
+        Assert.NotNull(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "image", "image/jpeg", 20_971_521, sha)));
+        Assert.NotNull(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "image", "image/png", 10, new byte[31])));
+        Assert.Null(BlobAssembly.Refusal(new BlobStart("x", "o", 0, "image", "image/jpeg", 20_971_520, sha)));
+    }
+
+    /// devices.json версии 0.1.0 (без Os, Form и Alias) читается; новые поля меняются по отдельности.
+    [Fact]
+    public void OldDevicesFileLoads()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "clipvey-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "devices.json"),
+                """[{"DeviceId":"ab","Name":"PC","PublicKey":"AA==","LastHost":"10.0.0.2","LastPort":48620,"Enabled":false}]""");
+            var store = new DeviceStore(directory);
+            var device = Assert.Single(store.Load());
+            Assert.Equal("PC", device.Name);
+            Assert.False(device.Enabled);
+            Assert.Null(device.Os);
+            Assert.Null(device.Alias);
+            store.SetAlias("ab", "Кухня");
+            store.UpdateInfo("ab", "PC-2", new DeviceType("windows", null));
+            device = Assert.Single(store.Load());
+            Assert.Equal("Кухня", device.Alias);
+            Assert.Equal("PC-2", device.Name);
+            Assert.Equal("windows", device.Os);
+            Assert.Null(device.Form);
+            store.UpdateInfo("ab", null, DeviceType.Unknown);
+            Assert.Equal("PC-2", store.Load()[0].Name);
+            Assert.Equal("windows", store.Load()[0].Os);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("  Кухня  ", "Кухня")]
+    [InlineData("", "")]
+    public void NameNormalization(string raw, string expected) => Assert.Equal(expected, ClipveyNode.NormalizeName(raw));
+
+    [Fact]
+    public void LongNameIsCutAt63Bytes()
+    {
+        var name = ClipveyNode.NormalizeName(new string('ж', 40));
+        Assert.Equal(31, name.Length);
+        Assert.True(Encoding.UTF8.GetByteCount(name) <= 63);
+    }
+
+    [Fact]
+    public void FailureCodes()
+    {
+        Assert.Equal(FailureReason.Disabled, Failures.Of(new PeerRejectedException("disabled")));
+        Assert.Equal(FailureReason.UnknownDevice, Failures.Of(new PeerRejectedException("unknown_device")));
+        Assert.Equal(FailureReason.Rejected, Failures.Of(new PeerRejectedException("что-то новое")));
+        Assert.Equal(FailureReason.CodeMismatch, Failures.Of(new PairingCodeMismatchException()));
+        Assert.Equal(FailureReason.WrongDevice, Failures.Of(new WrongDeviceException()));
+        Assert.Equal(FailureReason.Cancelled, Failures.Of(new OperationCanceledException()));
+        Assert.Equal(FailureReason.ConnectionFailed, Failures.Of(new SocketException()));
+        Assert.Equal(FailureReason.ProtocolError, Failures.Of(new ProtocolException("x")));
     }
 }
 
