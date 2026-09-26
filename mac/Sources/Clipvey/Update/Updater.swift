@@ -69,7 +69,13 @@ final class Updater {
     private(set) var available: ReleaseInfo?
     /// «Позже»: полоса и точка на значке скрыты до следующей проверки.
     private(set) var dismissed = false
-    private(set) var notice: Notice?
+    private(set) var notice: Notice? {
+        didSet {
+            if let notice {
+                TestHooks.emitIfEnabled("UPDATE_NOTICE \(notice)")
+            }
+        }
+    }
 
     var checksAutomatically: Bool {
         didSet { UpdateSettings.checksAutomatically = checksAutomatically }
@@ -159,11 +165,12 @@ final class Updater {
                 TestHooks.emitIfEnabled("UPDATE_NONE \(release.version)")
             }
         } catch {
-            Log.app.info("Обновления (\(kind, privacy: .public)): не удалось проверить — \(String(describing: error), privacy: .public)")
+            let reason = (error as? URLError).map { "нет связи с сервером (\($0.code.rawValue)): \($0.localizedDescription)" } ?? String(describing: error)
+            Log.app.info("Обновления (\(kind, privacy: .public)): не удалось проверить — \(reason, privacy: .public)")
             if manual {
                 notice = .checkFailed
             }
-            TestHooks.emitIfEnabled("UPDATE_CHECK_FAILED \(manual ? "manual" : "auto") \(String(describing: error))")
+            TestHooks.emitIfEnabled("UPDATE_CHECK_FAILED \(manual ? "manual" : "auto") \(reason)")
         }
     }
 
