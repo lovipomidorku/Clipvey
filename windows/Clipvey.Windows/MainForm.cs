@@ -1,4 +1,5 @@
 using Clipvey.Core;
+using static Clipvey.Windows.Localization;
 
 namespace Clipvey.Windows;
 
@@ -9,7 +10,8 @@ internal sealed class MainForm : Form
     private const int ContentWidth = 440;
 
     private readonly ClipveyNode _node;
-    private readonly Label _summary = NewHeader("Устройства");
+    private readonly Label _summary = NewHeader("");
+    private readonly Label _pairingHeader = NewHeader("");
     private readonly FlowLayoutPanel _devices = NewColumn();
     private readonly FlowLayoutPanel _pairing = NewColumn();
     private readonly Label _result = new()
@@ -47,7 +49,7 @@ internal sealed class MainForm : Form
         Padding = new Padding(16);
 
         var root = NewColumn();
-        root.Controls.AddRange([_summary, _devices, NewHeader("Связывание"), _pairing, _result, _footer]);
+        root.Controls.AddRange([_summary, _devices, _pairingHeader, _pairing, _result, _footer]);
         Controls.Add(root);
 
         _codeBox.KeyPress += (_, e) => e.Handled = !char.IsControl(e.KeyChar) && !char.IsAsciiDigit(e.KeyChar);
@@ -70,7 +72,8 @@ internal sealed class MainForm : Form
         SuspendLayout();
         RebuildDevices();
         RebuildPairing();
-        _footer.Text = $"Этот компьютер: {_node.Name} · порт {_node.Port}";
+        _pairingHeader.Text = L("Связывание", "Pairing");
+        _footer.Text = L($"Этот компьютер: {_node.Name} · порт {_node.Port}", $"This PC: {_node.Name} · port {_node.Port}");
         ResumeLayout(true);
     }
 
@@ -90,14 +93,16 @@ internal sealed class MainForm : Form
     private void RebuildDevices()
     {
         var devices = _node.Devices;
+        var connected = devices.Count(device => device.Connected);
         _summary.Text = devices.Count == 0
-            ? "Устройства"
-            : $"Устройства: подключено {devices.Count(device => device.Connected)} из {devices.Count}";
+            ? L("Устройства", "Devices")
+            : L($"Устройства: подключено {connected} из {devices.Count}", $"Devices: {connected} of {devices.Count} connected");
         Clear(_devices);
         if (devices.Count == 0)
         {
             _devices.Controls.Add(NewLabel(
-                "Свяжите этот компьютер с Mac или другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.",
+                L("Свяжите этот компьютер с Mac или другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.",
+                  "Pair this PC with a Mac or another PC, and text you copy on one can be pasted on the other."),
                 gray: true));
             return;
         }
@@ -122,15 +127,15 @@ internal sealed class MainForm : Form
                 : device.Enabled && device.Problem is not null ? Color.DarkOrange
                 : Color.Gray,
         };
-        var status = !device.Enabled ? "синхронизация выключена"
-            : device.Connected ? "подключено"
-            : device.Problem ?? "не в сети";
+        var status = !device.Enabled ? L("синхронизация выключена", "sync is off")
+            : device.Connected ? L("подключено", "connected")
+            : device.Problem ?? L("не в сети", "offline");
         var name = new Label { Text = $"{device.Name}\n{status}", AutoSize = true, Anchor = AnchorStyles.Left, MaximumSize = new Size(220, 0) };
-        var toggle = new CheckBox { Text = "Синхронизация", Checked = device.Enabled, AutoSize = true, Anchor = AnchorStyles.Left };
+        var toggle = new CheckBox { Text = L("Синхронизация", "Sync"), Checked = device.Enabled, AutoSize = true, Anchor = AnchorStyles.Left };
         toggle.CheckedChanged += (_, _) => _node.SetEnabled(device.DeviceId, toggle.Checked);
-        var unpair = NewButton("Разорвать связь", () =>
+        var unpair = NewButton(L("Разорвать связь", "Unpair"), () =>
         {
-            var answer = MessageBox.Show(this, $"Разорвать связь с «{device.Name}»?", "Clipvey",
+            var answer = MessageBox.Show(this, L($"Разорвать связь с «{device.Name}»?", $"Unpair “{device.Name}”?"), "Clipvey",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (answer == DialogResult.Yes)
                 _node.Unpair(device.DeviceId);
@@ -153,49 +158,52 @@ internal sealed class MainForm : Form
         if (_node.IncomingPairing is { } incoming)
         {
             // Роль R: этот компьютер показывает код.
-            _pairing.Controls.Add(NewLabel($"Связывание с «{incoming.PeerName}»", bold: true));
+            _pairing.Controls.Add(NewLabel(L($"Связывание с «{incoming.PeerName}»", $"Pairing with “{incoming.PeerName}”"), bold: true));
             _pairing.Controls.Add(NewLabel(
                 incoming.Code is { } code ? $"{code[..3]} {code[3..]}" : "…",
                 font: new Font(FontFamily.GenericMonospace, 26, FontStyle.Bold)));
             _pairing.Controls.Add(NewLabel(incoming.Verified
-                ? $"«{incoming.PeerName}» подтвердил код ✓ Нажмите «Готово»."
-                : $"Введите этот код на «{incoming.PeerName}»."));
+                ? L($"«{incoming.PeerName}» подтвердил код ✓ Нажмите «Готово».", $"“{incoming.PeerName}” confirmed the code ✓ Select Done.")
+                : L($"Введите этот код на «{incoming.PeerName}».", $"Enter this code on “{incoming.PeerName}”.")));
             _pairing.Controls.Add(NewRow(
-                NewButton("Готово", incoming.Confirm, enabled: incoming.Verified),
-                NewButton("Отмена", incoming.Cancel)));
+                NewButton(L("Готово", "Done"), incoming.Confirm, enabled: incoming.Verified),
+                NewButton(L("Отмена", "Cancel"), incoming.Cancel)));
         }
         else if (_outgoingPeer is { } peer)
         {
             // Роль I: этот компьютер вводит код с экрана другого устройства.
-            _pairing.Controls.Add(NewLabel($"Связывание с «{peer}»", bold: true));
+            _pairing.Controls.Add(NewLabel(L($"Связывание с «{peer}»", $"Pairing with “{peer}”"), bold: true));
             if (_codeRequest is not null)
             {
-                _pairing.Controls.Add(NewLabel($"Введите код с экрана «{peer}»:"));
-                _pairing.Controls.Add(NewRow(_codeBox, NewButton("Подтвердить", SubmitCode)));
+                _pairing.Controls.Add(NewLabel(L($"Введите код с экрана «{peer}»:", $"Enter the code shown on “{peer}”:")));
+                _pairing.Controls.Add(NewRow(_codeBox, NewButton(L("Подтвердить", "Confirm"), SubmitCode)));
             }
             else
             {
-                _pairing.Controls.Add(NewLabel(_codeAccepted ? $"Код верный ✓ Нажмите «Готово» на «{peer}»." : "Подключение…"));
+                _pairing.Controls.Add(NewLabel(_codeAccepted
+                    ? L($"Код верный ✓ Нажмите «Готово» на «{peer}».", $"Code is correct ✓ Select Done on “{peer}”.")
+                    : L("Подключение…", "Connecting…")));
             }
-            _pairing.Controls.Add(NewRow(NewButton("Отмена", CancelOutgoing)));
+            _pairing.Controls.Add(NewRow(NewButton(L("Отмена", "Cancel"), CancelOutgoing)));
         }
         else if (_node.IsPairingMode)
         {
-            _pairing.Controls.Add(NewLabel("Нажмите «Связать» и на другом устройстве. Затем выберите его здесь — или этот компьютер там."));
+            _pairing.Controls.Add(NewLabel(L("Нажмите «Связать» и на другом устройстве. Затем выберите его здесь — или этот компьютер там.",
+                "Select Pair on the other device too. Then choose it here, or choose this PC there.")));
             var candidates = _node.PairingCandidates;
             if (candidates.Count == 0)
-                _pairing.Controls.Add(NewLabel("Поиск устройств…", gray: true));
+                _pairing.Controls.Add(NewLabel(L("Поиск устройств…", "Looking for devices…"), gray: true));
             foreach (var candidate in candidates)
             {
                 var label = NewLabel(candidate.Name);
                 label.Anchor = AnchorStyles.Left;
-                _pairing.Controls.Add(NewRow(label, NewButton("Связать", () => StartOutgoing(candidate))));
+                _pairing.Controls.Add(NewRow(label, NewButton(L("Связать", "Pair"), () => StartOutgoing(candidate))));
             }
-            _pairing.Controls.Add(NewRow(NewButton("Закрыть", _node.StopPairingMode)));
+            _pairing.Controls.Add(NewRow(NewButton(L("Закрыть", "Close"), _node.StopPairingMode)));
         }
         else
         {
-            _pairing.Controls.Add(NewButton("Связать новое устройство", () =>
+            _pairing.Controls.Add(NewButton(L("Связать новое устройство", "Pair a new device"), () =>
             {
                 _result.Text = "";
                 _node.StartPairingMode();
