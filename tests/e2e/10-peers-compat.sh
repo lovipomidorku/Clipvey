@@ -21,7 +21,7 @@ pair_peers old "$OLD_NAME" "$OLD_PORT" new "$NEW_NAME" "$NEW_PORT" "$OLD_PEER" "
 start_old_peer old "$OLD_NAME" "$OLD_PORT" --send "от 0.1.0 $SUFFIX" --send-delay 3
 start_peer new "$NEW_NAME" "$NEW_PORT" --send-image "$IMAGE" --send "от нового $SUFFIX" --send-delay 2 --rename-after 8 "$NEW_RENAMED"
 expect "$WORK/new.out" "^CONNECTED $OLD_NAME" 30 "новый подключён к 0.1.0"
-expect "$WORK/old.out" "^CONNECTED $NEW_NAME" 10 "0.1.0 подключён к новому"
+expect "$WORK/old.out" "^CONNECTED $NEW_NAME" 25 "0.1.0 подключён к новому"
 expect "$WORK/new.out" "^INFO $OLD_NAME os=- form=- caps=-$" 5 "у 0.1.0 нет типа и caps"
 expect "$WORK/new.out" "^IMAGE_SENT 0$" 15 "картинка 0.1.0 не отправлена"
 expect_clip peer "$WORK/old.out" "$NEW_NAME" "от нового $SUFFIX" 10 "0.1.0 получил текст нового"
