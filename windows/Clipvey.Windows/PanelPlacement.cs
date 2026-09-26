@@ -74,6 +74,37 @@ internal static class PanelPlacement
         return DockStyle.Bottom;
     }
 
+    /// DPI монитора под курсором (null — не удалось узнать, например на старой Windows).
+    public static int? CursorMonitorDpi()
+    {
+        try
+        {
+            var cursor = Cursor.Position;
+            var monitor = MonitorFromPoint(new PointStruct { X = cursor.X, Y = cursor.Y }, MonitorDefaultToNearest);
+            if (monitor != IntPtr.Zero && GetDpiForMonitor(monitor, MdtEffectiveDpi, out var dpiX, out _) == 0 && dpiX is >= 48 and <= 960)
+                return (int)dpiX;
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
+        {
+        }
+        return null;
+    }
+
+    private const uint MonitorDefaultToNearest = 2;
+    private const int MdtEffectiveDpi = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointStruct
+    {
+        public int X, Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromPoint(PointStruct point, uint flags);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
+
     private static Rectangle? TaskbarRect()
     {
         try

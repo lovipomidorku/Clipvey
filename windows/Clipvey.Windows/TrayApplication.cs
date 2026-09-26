@@ -16,7 +16,7 @@ internal sealed class TrayApplication : ApplicationContext
     private TrayState? _trayState;
     private readonly SynchronizationContext _ui;
     private ToolStripMenuItem? _statusItem;
-    private MainForm? _form;
+    private TrayPanel? _form;
 
     public TrayApplication()
     {
@@ -38,6 +38,8 @@ internal sealed class TrayApplication : ApplicationContext
                 TogglePanel();
         };
         Localization.Changed += OnLanguageChanged;
+        Theme.Start(_ui);
+        Theme.Changed += OnThemeChanged;
 
         _node.ClipReceived += (text, _) => OnUi(() => _watcher.WriteRemote(text));
         _node.Changed += () => OnUi(Refresh);
@@ -82,7 +84,7 @@ internal sealed class TrayApplication : ApplicationContext
             language.DropDownItems.Add(item);
         }
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { Renderer = new ThemedMenuRenderer(Theme.Current) };
         menu.Items.Add(_statusItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(L("Открыть Clipvey", "Open Clipvey"), null, (_, _) => ShowForm());
@@ -118,6 +120,12 @@ internal sealed class TrayApplication : ApplicationContext
         Refresh();
     }
 
+    private void OnThemeChanged()
+    {
+        BuildMenu();
+        _form?.RefreshContent();
+    }
+
     private void OnLocalCopy(string text)
     {
         if (_node.Devices.Any(device => device.Connected))
@@ -142,7 +150,9 @@ internal sealed class TrayApplication : ApplicationContext
             : TrayState.Idle);
         var tip = $"Clipvey: {status}";
         _tray.Text = tip.Length <= MaxTrayText ? tip : tip[..(MaxTrayText - 1)] + "…";
-        _form?.RefreshContent();
+        // Скрытая панель перестроится при показе.
+        if (_form is { Visible: true })
+            _form.RefreshContent();
     }
 
     private void UpdateTrayIcon(TrayState state)
@@ -160,7 +170,7 @@ internal sealed class TrayApplication : ApplicationContext
     private void ShowForm()
     {
         if (_form is null || _form.IsDisposed)
-            _form = new MainForm(_node);
+            _form = new TrayPanel(_node);
         _form.ShowPanel();
     }
 
@@ -185,6 +195,8 @@ internal sealed class TrayApplication : ApplicationContext
     private void Quit()
     {
         Localization.Changed -= OnLanguageChanged;
+        Theme.Changed -= OnThemeChanged;
+        Theme.Stop();
         _tray.Visible = false;
         _tray.Dispose();
         _icons.Dispose();
