@@ -2,7 +2,7 @@
 
 **English** · [Русский](README.ru.md)
 
-Clipboard text sync between a Mac and Windows PCs on your local network. Copy on one device, paste on any other.
+Clipboard sync between a Mac and Windows PCs on your local network: text and images. Copy on one device, paste on any other.
 
 Text from an iPhone gets through via the Mac: Apple's Universal Clipboard carries it from the iPhone to the Mac, and Clipvey passes it on to Windows. Requirements: the Mac is on and awake, the iPhone is nearby, both use the same Apple ID, and Handoff is on.
 
@@ -21,23 +21,26 @@ The unsigned `.exe` triggers a SmartScreen warning on first launch. Click "More 
 
 ## Usage
 
-The interface is in Russian for now; button names are given in the original.
+The interface is in English and Russian. By default it follows the system language; to change it, use Language in the settings on the Mac, or in the panel or icon menu on Windows.
 
-1. **Pair devices.** Click «Связать новое устройство» (Pair new device) on both. On one, pick the other from the list and enter the code it shows; on the other, click «Готово» (Done). The code is single-use and valid for 2 minutes.
-2. **More devices.** Each new device only needs to be paired with any one device that's already paired: text is relayed along the chain. Pairing more devices directly makes delivery more reliable without creating duplicates.
-3. **Turn a device off.** The switch next to it stops syncing without removing the pairing. «Разорвать связь» (Unpair) removes the pairing for good.
+1. **Pair devices.** Click "Pair New Device" on both. On one, pick the other from the list and enter the code it shows; on the other, click "Done". The code is single-use and valid for 2 minutes.
+2. **More devices.** Each new device only needs to be paired with any one device that's already paired: data is relayed along the chain. Pairing more devices directly makes delivery more reliable without creating duplicates.
+3. **Turn a device off.** The switch next to it stops syncing without removing the pairing. "Unpair" removes the pairing for good.
+4. **Names.** Set this computer's name in the settings; other devices see it. You can also rename any other device: that name is only shown on your computer, and "Reset" brings back the name the device reports.
+5. **Images.** PNG, JPEG and screenshots up to 20 MiB are synced; HEIC photos from an iPhone are converted to JPEG. "Sync images" in the settings turns this off. An image only goes to devices that have image sync turned on too.
+6. **Updates.** Clipvey checks for a new version at launch and once a day, and installs it only after you confirm. Automatic checks can be turned off in the settings.
 
 What is not synced:
 - **passwords**, i.e. anything password managers mark as concealed;
-- **text larger than 1 MiB**;
-- **files, images and formatting**: the first version syncs plain text only.
+- **text larger than 1 MiB and images larger than 20 MiB**;
+- **files and formatting**: text arrives as plain text.
 
 ## Where things are stored
 
 | | Mac | Windows |
 |---|---|---|
 | Device key and device list | `~/Library/Application Support/Clipvey/` | `%APPDATA%\Clipvey\` (the key is encrypted with DPAPI) |
-| Log | `log stream --predicate 'subsystem == "io.github.lovipomidorku.clipvey"' --level info` | `%LOCALAPPDATA%\Clipvey\clipvey.log` (icon menu → «Открыть журнал») |
+| Log | `log stream --predicate 'subsystem == "io.github.lovipomidorku.clipvey"' --level info` | `%LOCALAPPDATA%\Clipvey\clipvey.log` (icon menu → "Open log") |
 | Settings | `defaults read io.github.lovipomidorku.clipvey` | launch at login: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 
 ## Security
