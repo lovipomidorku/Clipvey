@@ -2,8 +2,7 @@
 # Сценарий 18. Совместимость нового Mac с двойником 0.1.0:
 #   связывание в обеих ролях, текст в обе стороны;
 #   0.1.0 не заявляет image — Mac ему картинок не шлёт, info (переименование Mac) 0.1.0 пропускает.
-# Часть 1: Mac — I и подключается к 0.1.0 по 127.0.0.1 (--pair-address); сеанс — по этой связи.
-# Часть 2: 0.1.0 в роли I находит Mac только через mDNS — ей нужен рабочий mDNS двойников, поэтому она последняя.
+# Mac — I (в режиме loopback — по 127.0.0.1), сеанс — по этой связи. 0.1.0 в роли I — сценарий 20.
 source "$(dirname "$0")/lib.sh"
 build
 require_old_peer
@@ -16,12 +15,13 @@ BOARD="e2e-pb-$SUFFIX"
 IMAGE="$WORK/image.png"
 make_png "$IMAGE" 300000 1
 
-# Часть 1: Mac — I, 0.1.0 — R.
+# Связывание: Mac — I, 0.1.0 — R.
 start_old_peer old "$OLD_NAME" "$OLD_PORT" --pair --auto-confirm
 OLD_PID=$LAST_PID
 expect "$WORK/old.out" "^READY " 20 "0.1.0 запущен (R)"
-start_mac mac "$MAC_NAME" "e2e-pb1-$SUFFIX" --pair-with "$OLD_NAME" --code-file "$WORK/old.out" \
-    --pair-address "127.0.0.1:$OLD_PORT"
+DIRECT=()
+loopback_mode && DIRECT=(--pair-address "127.0.0.1:$OLD_PORT")
+start_mac mac "$MAC_NAME" "e2e-pb1-$SUFFIX" --pair-with "$OLD_NAME" --code-file "$WORK/old.out" ${DIRECT[@]+"${DIRECT[@]}"}
 MAC_PID=$LAST_PID
 expect "$WORK/old.out" "^PAIRING_CODE [0-9]{6} FROM $MAC_NAME" 30 "0.1.0 показал код"
 expect "$WORK/mac.out" "^PAIRED $OLD_NAME" 30 "Mac связан с 0.1.0 (Mac — I)"
@@ -46,13 +46,5 @@ pb write "$BOARD" "после info $SUFFIX"
 expect_clip peer "$WORK/old.out" "$MAC_NAME" "после info $SUFFIX" 15 "текст после info дошёл"
 expect_absent "$WORK/old.err" "blob_" "0.1.0 не получал кадров картинки"
 expect_absent "$WORK/old.out" "^DISCONNECTED" "сеанс с 0.1.0 не рвался"
-
-# Часть 2: Mac — R, 0.1.0 — I (через mDNS).
-start_mac mac2 "$MAC_NAME-r" "e2e-pb2-$SUFFIX" --pair --auto-confirm
-expect "$WORK/mac2.out" "^READY " 20 "Mac запущен (R)"
-start_old_peer old2 "$OLD_NAME-i" "$(free_port)" --pair-with "$MAC_NAME-r" --code-file "$WORK/mac2.out"
-expect "$WORK/mac2.out" "^PAIRING_CODE [0-9]{6} FROM $OLD_NAME-i" 30 "Mac показал код 0.1.0 (0.1.0 нашёл Mac через mDNS)"
-expect "$WORK/old2.out" "^PAIRED $MAC_NAME-r" 30 "0.1.0 связан с Mac (Mac — R)"
-expect "$WORK/mac2.out" "^PAIRED $OLD_NAME-i" 30 "Mac связан с 0.1.0 (Mac — R)"
 
 pass

@@ -9,8 +9,9 @@
 #   E2E_KEEP=1         не удалять папку сценария tests/e2e/tmp/<сценарий>-<суффикс> после успеха
 #   E2E_TIMEOUT=N      множитель таймаутов (по умолчанию 1)
 #   E2E_SUFFIX=S       суффикс имён устройств вместо случайного
-#   E2E_NO_PREFLIGHT=1 не проверять, что Mac доступен по адресу в локальной сети (сценарии, где Mac — R,
-#                      связываются и работают через 127.0.0.1; где Mac — I, нужен рабочий mDNS)
+#   E2E_NO_PREFLIGHT=1 режим loopback: не проверять, что Mac доступен по адресу в локальной сети, и
+#                      связывать Mac с двойниками по 127.0.0.1 без mDNS (см. loopback_mode). Поиск
+#                      через Bonjour/mDNS и путь через локальную сеть тогда не проверяются.
 #   E2E_OLD_PEER=FILE  готовый двойник 0.1.0 для сценариев совместимости
 set -euo pipefail
 
@@ -373,6 +374,11 @@ for path, key, value in ((mac_path, "lastPort", peer_port), (peer_path, "LastPor
 PY
 }
 
+# Режим loopback (E2E_NO_PREFLIGHT=1): связывание Mac с двойником идёт по 127.0.0.1 (--pair-address)
+# без поиска через mDNS и без адреса в локальной сети. Иначе сценарии связываются как пользователь —
+# через список найденных устройств (Bonjour / mDNS), что заодно проверяет TXT.
+loopback_mode() { [ -n "${E2E_NO_PREFLIGHT:-}" ]; }
+
 # mac_port FILE — порт проверочного Mac из строки READY.
 mac_port() {
     grep -oE "^READY .* port=[0-9]+" "$1" | tail -n 1 | grep -oE "[0-9]+$"
@@ -385,10 +391,10 @@ pair_mac_responder() {
     start_mac "$mac_tag" "$mac_name" "e2e-pb-$SUFFIX-$mac_tag" --pair --auto-confirm
     local mac_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^READY " 20 "Mac запущен"
-    # Двойник подключается к Mac по 127.0.0.1, не дожидаясь mDNS: поиск двойника через mDNS
-    # на этом Mac может не работать (VPN, сетевой фильтр), а loopback сетевой фильтр не держит.
+    local direct=()
+    loopback_mode && direct=(--pair-address "127.0.0.1:$(mac_port "$WORK/$mac_tag.out")")
     start_peer "$peer_tag" "$peer_name" "$peer_port" --pair-with "$mac_name" --code-file "$WORK/$mac_tag.out" \
-        --pair-address "127.0.0.1:$(mac_port "$WORK/$mac_tag.out")"
+        ${direct[@]+"${direct[@]}"}
     local peer_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^PAIRING_CODE [0-9]{6} FROM $peer_name" 30 "Mac показал код"
     expect "$WORK/$peer_tag.out" "^PAIRED $mac_name" 30 "двойник связан с Mac"
@@ -405,9 +411,10 @@ pair_mac_initiator() {
     start_peer "$peer_tag" "$peer_name" "$peer_port" --pair --auto-confirm
     local peer_pid=$LAST_PID
     expect "$WORK/$peer_tag.out" "^READY " 20 "двойник запущен"
-    # Mac подключается к двойнику по 127.0.0.1, не дожидаясь Bonjour (см. pair_mac_responder).
+    local direct=()
+    loopback_mode && direct=(--pair-address "127.0.0.1:$peer_port")
     start_mac "$mac_tag" "$mac_name" "e2e-pb-$SUFFIX-$mac_tag" --pair-with "$peer_name" --code-file "$WORK/$peer_tag.out" \
-        --pair-address "127.0.0.1:$peer_port"
+        ${direct[@]+"${direct[@]}"}
     local mac_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^PAIRING_WITH $peer_name" 30 "Mac нашёл двойника"
     expect "$WORK/$peer_tag.out" "^PAIRING_CODE [0-9]{6} FROM $mac_name" 30 "двойник показал код"
