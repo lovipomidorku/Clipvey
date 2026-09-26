@@ -4,6 +4,7 @@ import AppKit
 ///   --test                 печатать события в stdout («READY …», «CONNECTED …», «CLIP …»)
 ///   --data DIR             папка с ключом и списком устройств вместо ~/Library/Application Support/Clipvey
 ///   --pasteboard NAME      работать с именованным буфером вместо общего (macOS не спрашивает разрешения)
+///   --name NAME            имя устройства вместо имени Mac (чтобы не путать с настоящим Clipvey)
 ///   --pair                 открыть режим связывания
 ///   --auto-confirm         в роли R нажать «Готово», когда другая сторона подтвердит код
 ///   --pair-with TEXT       в роли I связаться с устройством, в имени которого есть TEXT
@@ -16,6 +17,7 @@ enum TestHooks {
     static private(set) var autoConfirm = false
     static private(set) var dataDirectory: URL?
     static private(set) var pasteboardName: String?
+    static private(set) var deviceName: String?
     private static var startPairing = false
     private static var pairWith: String?
     private static var codeFile: String?
@@ -34,6 +36,7 @@ enum TestHooks {
         startPairing = arguments.contains("--pair")
         dataDirectory = value("--data").map { URL(fileURLWithPath: $0) }
         pasteboardName = value("--pasteboard")
+        deviceName = value("--name")
         pairWith = value("--pair-with")
         codeFile = value("--code-file")
         sendText = value("--send")

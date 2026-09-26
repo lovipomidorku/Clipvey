@@ -68,7 +68,7 @@ final class AppModel {
         keepAwake = Settings.keepAwake
         do {
             let identity = try DeviceIdentity.loadOrCreate(at: directory.appendingPathComponent("identity.key"))
-            node = ClipveyNode(identity: identity, name: AppInfo.deviceName, store: DeviceStore(directory: directory))
+            node = ClipveyNode(identity: identity, name: TestHooks.deviceName ?? AppInfo.deviceName, store: DeviceStore(directory: directory))
             startupError = nil
         } catch {
             node = nil
