@@ -42,6 +42,7 @@ final class AppModel {
     }
 
     let node: ClipveyNode?
+    /// Почему узел не запустился (текст ошибки системы; подпись к нему подбирает интерфейс).
     let startupError: String?
 
     var page: Page = .main
@@ -72,7 +73,8 @@ final class AppModel {
             startupError = nil
         } catch {
             node = nil
-            startupError = "Не удалось загрузить ключ устройства: \(error.localizedDescription)"
+            startupError = error.localizedDescription
+            Log.app.error("Не удалось загрузить ключ устройства: \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -29,6 +29,26 @@ struct SettingsToggle: View {
     }
 }
 
+/// Строка настроек «Язык»: смена применяется сразу, без перезапуска.
+struct LanguagePicker: View {
+    var body: some View {
+        @Bindable var language = Language.shared
+        HStack {
+            Text(L("Язык", "Language"))
+            Spacer()
+            Picker(L("Язык", "Language"), selection: $language.choice) {
+                ForEach(AppLanguage.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .fixedSize()
+        }
+    }
+}
+
 extension View {
     /// Общий вид карточек: отступы и полупрозрачная подложка.
     func cardStyle() -> some View {
