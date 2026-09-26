@@ -6,7 +6,7 @@ import Network
 /// идут без точек приостановки, поэтому порядок кадров на проводе совпадает с порядком счётчиков.
 actor PeerLink {
     static let maxFrameBytes = 4 * 1024 * 1024
-    private static let queue = DispatchQueue(label: "local.clipvey.network")
+    private static let queue = DispatchQueue(label: "io.github.lovipomidorku.clipvey.network")
 
     nonisolated let connection: NWConnection
     private var buffer = Data()

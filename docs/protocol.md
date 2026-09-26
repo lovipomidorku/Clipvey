@@ -158,7 +158,7 @@ Clipvey синхронизирует текст буфера обмена меж
 
 - **Переводы строк.** Windows переводит `\r\n` ↔ `\n`.
 - **Защита от зацикливания.** Сторона, записавшая в буфер полученный текст, помечает запись своим маркером и не отправляет её обратно.
-  - На Mac маркер — тип `local.clipvey.remote`.
+  - На Mac маркер — тип `io.github.lovipomidorku.clipvey.remote`.
   - На Windows — формат `ClipveyRemote`.
 - **Пароли не передаются.** Не отправляется текст, помеченный как секретный:
   - на Mac — типы `org.nspasteboard.ConcealedType` и `org.nspasteboard.TransientType`;

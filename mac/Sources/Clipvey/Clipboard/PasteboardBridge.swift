@@ -6,7 +6,7 @@ import AppKit
 @MainActor
 final class PasteboardBridge {
     /// Отметка «текст пришёл с другого устройства»: такой текст не отправляется обратно.
-    static let remoteMarker = NSPasteboard.PasteboardType("local.clipvey.remote")
+    static let remoteMarker = NSPasteboard.PasteboardType("io.github.lovipomidorku.clipvey.remote")
     /// Так менеджеры паролей помечают секретное содержимое (nspasteboard.org).
     private static let secretTypes: Set<String> = ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType"]
     private static let maxBytes = 1024 * 1024

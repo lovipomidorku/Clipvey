@@ -5,5 +5,13 @@
     <LangVersion>latest</LangVersion>
     <!-- Проверка уязвимостей пакетов ходит в сеть и у нас упирается в таймаут; внешних пакетов нет. -->
     <NuGetAudit>false</NuGetAudit>
+    <!-- Воспроизводимая сборка: в сборки не попадают локальные пути к исходникам. -->
+    <Deterministic>true</Deterministic>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=/_/</PathMap>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Без отладочных символов: иначе в exe остаётся путь к .pdb. -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
 </Project>

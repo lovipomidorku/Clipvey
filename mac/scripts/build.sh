@@ -5,15 +5,17 @@
 set -euo pipefail
 
 APP_NAME="Clipvey"
-BUNDLE_ID="local.clipvey"         # не меняйте: к нему привязаны настройки и разрешения macOS
+BUNDLE_ID="io.github.lovipomidorku.clipvey"   # не меняйте: к нему привязаны настройки и разрешения macOS
 VERSION="0.1.0"
 EXECUTABLE="Clipvey"
 
 ROOT="${0:A:h:h}"
 cd "$ROOT"
 
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+# Пути к исходникам заменяются на «.», чтобы в бинарник не попали локальные папки.
+SWIFT_FLAGS=(-c release -Xswiftc -file-prefix-map -Xswiftc "$ROOT=.")
+swift build "${SWIFT_FLAGS[@]}"
+BIN_DIR="$(swift build "${SWIFT_FLAGS[@]}" --show-bin-path)"
 
 APP="$ROOT/build/$APP_NAME.app"
 rm -rf "$APP"

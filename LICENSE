@@ -1,0 +1,80 @@
+Clipvey
+Copyright (c) 2026 lovipomidorku (https://github.com/lovipomidorku)
+All rights reserved.
+
+This is not an open-source license. The source code is published so that
+anyone can read it and check how Clipvey works.
+
+You MAY:
+  1. Download official builds of Clipvey published by the author (the Releases
+     page of https://github.com/lovipomidorku/Clipvey or the author's website)
+     and use them free of charge on any number of your own devices.
+  2. Read the source code and build it on your own computers solely for your
+     own personal use, for example to verify that an official build matches
+     the published code.
+
+You MAY NOT, without prior written permission from the author:
+  1. Copy, publish, distribute, sublicense or sell the source code or any
+     build of Clipvey, in whole or in part, including builds you made
+     yourself, except as allowed by the GitHub Terms of Service (see below).
+  2. Modify the code for distribution or create and distribute derivative
+     works based on it.
+  3. Use the name "Clipvey" or its icon for other software.
+
+GitHub. By publishing this repository on GitHub, the author allows other
+GitHub users to view it and to fork it within GitHub, as the GitHub Terms of
+Service require. That permission does not grant any rights beyond those
+listed above.
+
+Contributions. By submitting a pull request, issue or other contribution, you
+agree that the author may use, modify and distribute it under any terms,
+including this license.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Перевод на русский язык. При расхождении действует английский текст выше.
+
+Clipvey
+© 2026 lovipomidorku (https://github.com/lovipomidorku)
+Все права защищены.
+
+Это не лицензия открытого программного обеспечения. Исходный код опубликован,
+чтобы любой мог его прочитать и проверить, как работает Clipvey.
+
+Разрешается:
+  1. Скачивать официальные сборки Clipvey, опубликованные автором (страница
+     Releases репозитория https://github.com/lovipomidorku/Clipvey или сайт
+     автора), и бесплатно пользоваться ими на любом числе своих устройств.
+  2. Читать исходный код и собирать его на своих компьютерах только для
+     личного использования, например чтобы убедиться, что официальная сборка
+     соответствует опубликованному коду.
+
+Без предварительного письменного разрешения автора запрещается:
+  1. Копировать, публиковать, распространять, сублицензировать или продавать
+     исходный код или любую сборку Clipvey, полностью или частично, включая
+     собственные сборки, кроме случаев, разрешённых условиями GitHub (см. ниже).
+  2. Изменять код для распространения, а также создавать и распространять
+     производные работы на его основе.
+  3. Использовать название «Clipvey» или его значок для других программ.
+
+GitHub. Публикуя репозиторий на GitHub, автор разрешает другим пользователям
+GitHub просматривать его и создавать форки внутри GitHub, как того требуют
+условия использования GitHub. Это разрешение не даёт никаких прав сверх
+перечисленных выше.
+
+Доработки. Отправляя pull request, issue или другую доработку, вы соглашаетесь,
+что автор может использовать, изменять и распространять её на любых условиях,
+в том числе на условиях этой лицензии.
+
+ПРОГРАММА ПРЕДОСТАВЛЯЕТСЯ «КАК ЕСТЬ», БЕЗ КАКИХ-ЛИБО ГАРАНТИЙ, ЯВНЫХ ИЛИ
+ПОДРАЗУМЕВАЕМЫХ, ВКЛЮЧАЯ ГАРАНТИИ ТОВАРНОЙ ПРИГОДНОСТИ, СООТВЕТСТВИЯ
+ОПРЕДЕЛЁННОЙ ЦЕЛИ И ОТСУТСТВИЯ НАРУШЕНИЙ. АВТОР НИ В КАКОМ СЛУЧАЕ НЕ НЕСЁТ
+ОТВЕТСТВЕННОСТИ ПО ИСКАМ, ЗА УЩЕРБ ИЛИ ИНЫЕ ТРЕБОВАНИЯ, ВОЗНИКАЮЩИЕ ИЗ
+ПРОГРАММЫ, ЕЁ ИСПОЛЬЗОВАНИЯ ИЛИ ИНЫХ ДЕЙСТВИЙ С НЕЙ.

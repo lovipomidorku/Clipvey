@@ -2,9 +2,9 @@ import Foundation
 import IOKit.pwr_mgt
 import os
 
-/// Журнал. Смотреть: log stream --predicate 'subsystem == "local.clipvey"' --level info
+/// Журнал. Смотреть: log stream --predicate 'subsystem == "io.github.lovipomidorku.clipvey"' --level info
 enum Log {
-    static let subsystem = "local.clipvey"
+    static let subsystem = "io.github.lovipomidorku.clipvey"
     static let app = Logger(subsystem: subsystem, category: "app")
     static let network = Logger(subsystem: subsystem, category: "network")
     static let clipboard = Logger(subsystem: subsystem, category: "clipboard")

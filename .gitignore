@@ -4,3 +4,8 @@ bin/
 obj/
 dist/
 .DS_Store
+
+# Заметки для Claude Code — только локально
+CLAUDE.md
+PLAN.md
+.claude/
