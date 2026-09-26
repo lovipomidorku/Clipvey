@@ -11,7 +11,7 @@ namespace Clipvey.Windows;
 ///
 /// Что отправляется (docs/protocol.md, «Поведение сторон»):
 /// - ничего, если в буфере маркер ClipveyRemote (записано нами) или формат «секретного» содержимого;
-/// - картинка — если картинки можно отправлять, в буфере нет файлов (CF_HDROP) и текста нет или это одна ссылка;
+/// - картинка — если картинки можно отправлять и текста нет или это одна ссылка;
 ///   формат PNG как есть, иначе CF_DIBV5 / CF_DIB, переведённый в PNG;
 /// - иначе текст.
 internal sealed class ClipboardWatcher : NativeWindow, IDisposable
@@ -22,7 +22,6 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     private const uint CfUnicodeText = 13;
     private const uint CfDib = 8;
     private const uint CfDibV5 = 17;
-    private const uint CfHDrop = 15;
 
     /// Отметка «пришло с другого устройства»: такое содержимое не отправляется обратно.
     private const string RemoteFormatName = "ClipveyRemote";
@@ -261,6 +260,8 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     {
         if (!_shouldRead())
             return;
+        // До открытия буфера: пока он открыт, другие программы ждут.
+        var wantImages = _shouldReadImages();
         // Программа-источник может ещё держать буфер открытым — пробуем несколько раз.
         Snapshot? snapshot = null;
         var opened = false;
@@ -277,7 +278,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         }
         try
         {
-            snapshot = ReadOpened();
+            snapshot = ReadOpened(wantImages);
         }
         finally
         {
@@ -297,7 +298,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 
     /// Буфер открыт. Сначала только список форматов и текст: картинку запрашиваем, лишь если отправлять будем её —
     /// Word и Excel рисуют картинку по запросу, и это долго.
-    private Snapshot? ReadOpened()
+    private Snapshot? ReadOpened(bool wantImages)
     {
         var formats = new List<uint>();
         for (uint format = 0; (format = EnumClipboardFormats(format)) != 0;)
@@ -311,14 +312,21 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         }
 
         var text = formats.Contains(CfUnicodeText) ? ReadText() : null;
-        if (!formats.Contains(CfHDrop) && ClipboardRules.TextIsAuxiliary(text) && _shouldReadImages())
+        // PNG, иначе тот из CF_DIBV5 / CF_DIB, что идёт первым: форматы перечисляются в порядке,
+        // в каком их положила программа, а второй DIB Windows выводит из первого сам.
+        uint? imageFormat = formats.Contains(_pngFormat) ? _pngFormat
+            : formats.FirstOrDefault(format => format is CfDib or CfDibV5) is var dib and not 0 ? dib
+            : null;
+        if (imageFormat is { } chosen)
         {
-            // PNG, иначе тот из CF_DIBV5 / CF_DIB, что идёт первым: форматы перечисляются в порядке,
-            // в каком их положила программа, а второй DIB Windows выводит из первого сам.
-            uint? imageFormat = formats.Contains(_pngFormat) ? _pngFormat
-                : formats.FirstOrDefault(format => format is CfDib or CfDibV5) is var dib and not 0 ? dib
-                : null;
-            if (imageFormat is { } chosen)
+            var auxiliary = ClipboardRules.TextIsAuxiliary(text);
+            if (!wantImages || !auxiliary)
+            {
+                // Картинка есть, но уходит текст (или ничего): причина и форматы — для разбора по журналу.
+                var reason = !wantImages ? "картинки выключены или их некому отправить" : "рядом с ней текст";
+                Log.Write($"Картинка из буфера не отправлена: {reason} (форматы: {string.Join(", ", formats.Select(FormatName))})");
+            }
+            else
             {
                 var names = string.Join(", ", formats.Select(FormatName));
                 var data = ReadBytes(chosen, chosen == _pngFormat ? Protocol.MaxImageBytes : MaxSourceDibBytes, out var tooLarge);
@@ -454,7 +462,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             case 7: return "CF_OEMTEXT";
             case CfDib: return "CF_DIB";
             case CfUnicodeText: return "CF_UNICODETEXT";
-            case CfHDrop: return "CF_HDROP";
+            case 15: return "CF_HDROP";
             case 16: return "CF_LOCALE";
             case CfDibV5: return "CF_DIBV5";
         }
