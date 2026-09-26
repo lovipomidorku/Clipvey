@@ -9,6 +9,9 @@
 #   E2E_KEEP=1         не удалять папку сценария tests/e2e/tmp/<сценарий>-<суффикс> после успеха
 #   E2E_TIMEOUT=N      множитель таймаутов (по умолчанию 1)
 #   E2E_SUFFIX=S       суффикс имён устройств вместо случайного
+#   E2E_NO_PREFLIGHT=1 не проверять, что Mac доступен по адресу в локальной сети (сценарии, где Mac — R,
+#                      связываются и работают через 127.0.0.1; где Mac — I, нужен рабочий mDNS)
+#   E2E_OLD_PEER=FILE  готовый двойник 0.1.0 для сценариев совместимости
 set -euo pipefail
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +20,10 @@ export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
 PEER="$ROOT/windows/Clipvey.Peer/bin/Debug/net10.0/clipvey-peer"
+# Двойник версии 0.1.0 для проверки совместимости (сценарии *-compat-*). По умолчанию собирается сам
+# (require_old_peer) из коммита «Clipvey 0.1.0» в tests/e2e/tmp/peer-0.1.0; готовый можно указать в E2E_OLD_PEER.
+OLD_PEER_DIR="$E2E_DIR/tmp/peer-0.1.0"
+OLD_PEER="${E2E_OLD_PEER:-$OLD_PEER_DIR/windows/Clipvey.Peer/bin/Debug/net10.0/clipvey-peer}"
 MAC="$ROOT/mac/.build/debug/Clipvey"
 PBTOOL="$E2E_DIR/tmp/pasteboard"
 MARKER="io.github.lovipomidorku.clipvey.remote"
@@ -83,18 +90,48 @@ pass() {
 
 # Сборка: Mac-приложение (debug), двойник, помощник для именованного буфера.
 build() {
-    [ -n "${E2E_SKIP_BUILD:-}" ] && [ -x "$MAC" ] && [ -x "$PEER" ] && [ -x "$PBTOOL" ] && return 0
+    build_pbtool
+    [ -n "${E2E_SKIP_BUILD:-}" ] && [ -x "$MAC" ] && [ -x "$PEER" ] && return 0
     say "сборка"
     (cd "$ROOT/mac" && swift build --product Clipvey 2>&1 | grep -E 'error|Compiling|Build complete' | grep -v '^$' | tail -n 3) \
         || fail "swift build"
     [ -x "$MAC" ] || fail "нет $MAC"
+    build_peer
+    if [ -n "${E2E_NO_PREFLIGHT:-}" ]; then
+        say "предварительная проверка сети пропущена (E2E_NO_PREFLIGHT)"
+    else
+        preflight_network
+    fi
+}
+
+# Только двойник (сценарии NN-peers-*.sh: без Mac-приложения, их не держит сетевой фильтр).
+build_peer() {
+    [ -n "${E2E_SKIP_BUILD:-}" ] && [ -x "$PEER" ] && return 0
     dotnet build "$ROOT/windows/Clipvey.Peer/Clipvey.Peer.csproj" -v quiet -nologo > "$WORK/build-peer.log" 2>&1 \
         || { cat "$WORK/build-peer.log"; fail "dotnet build"; }
+}
+
+build_pbtool() {
     mkdir -p "$(dirname "$PBTOOL")"
     if [ ! -x "$PBTOOL" ] || [ "$E2E_DIR/pasteboard.swift" -nt "$PBTOOL" ]; then
         swiftc -O "$E2E_DIR/pasteboard.swift" -o "$PBTOOL" || fail "swiftc pasteboard.swift"
     fi
-    preflight_network
+}
+
+# Двойник 0.1.0: если его нет, собрать из коммита «Clipvey 0.1.0» (git archive, без worktree).
+require_old_peer() {
+    [ -x "$OLD_PEER" ] && return 0
+    [ -n "${E2E_OLD_PEER:-}" ] && fail "нет двойника 0.1.0: $OLD_PEER"
+    local commit
+    commit=$(git -C "$ROOT" log --format=%H --grep='^Clipvey 0.1.0' | tail -n 1)
+    [ -n "$commit" ] || fail "не найден коммит «Clipvey 0.1.0» (задайте E2E_OLD_PEER)"
+    say "сборка двойника 0.1.0 из $commit"
+    rm -rf "$OLD_PEER_DIR"
+    mkdir -p "$OLD_PEER_DIR"
+    git -C "$ROOT" archive "$commit" windows | tar -x -C "$OLD_PEER_DIR" || fail "git archive"
+    dotnet build "$OLD_PEER_DIR/windows/Clipvey.Peer/Clipvey.Peer.csproj" -v quiet -nologo > "$WORK/build-old-peer.log" 2>&1 \
+        || { cat "$WORK/build-old-peer.log"; fail "сборка двойника 0.1.0"; }
+    [ -x "$OLD_PEER" ] || fail "нет $OLD_PEER после сборки"
 }
 
 # Проверка, что проверочный Mac принимает соединения по адресу в локальной сети, а не только
@@ -226,6 +263,17 @@ start_mac() {
     PIDS="$PIDS $LAST_PID"
 }
 
+# start_old_peer TAG NAME PORT [флаги…] — то же для двойника 0.1.0 (флаги картинок и имени он не знает).
+start_old_peer() {
+    local tag="$1" name="$2" port="$3"
+    shift 3
+    rotate "$tag"
+    "$OLD_PEER" run --data "$WORK/$tag" --name "$name" --port "$port" --seconds 600 "$@" \
+        >> "$WORK/$tag.out" 2>> "$WORK/$tag.err" &
+    LAST_PID=$!
+    PIDS="$PIDS $LAST_PID"
+}
+
 # stop PID — остановить один процесс сценария и дождаться завершения.
 stop() {
     local pid="$1"
@@ -325,6 +373,11 @@ for path, key, value in ((mac_path, "lastPort", peer_port), (peer_path, "LastPor
 PY
 }
 
+# mac_port FILE — порт проверочного Mac из строки READY.
+mac_port() {
+    grep -oE "^READY .* port=[0-9]+" "$1" | tail -n 1 | grep -oE "[0-9]+$"
+}
+
 # Связывание: Mac — R (показывает код), двойник — I (вводит код из вывода Mac).
 # pair_mac_responder MAC_TAG MAC_NAME PEER_TAG PEER_NAME PEER_PORT
 pair_mac_responder() {
@@ -332,7 +385,10 @@ pair_mac_responder() {
     start_mac "$mac_tag" "$mac_name" "e2e-pb-$SUFFIX-$mac_tag" --pair --auto-confirm
     local mac_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^READY " 20 "Mac запущен"
-    start_peer "$peer_tag" "$peer_name" "$peer_port" --pair-with "$mac_name" --code-file "$WORK/$mac_tag.out"
+    # Двойник подключается к Mac по 127.0.0.1, не дожидаясь mDNS: поиск двойника через mDNS
+    # на этом Mac может не работать (VPN, сетевой фильтр), а loopback сетевой фильтр не держит.
+    start_peer "$peer_tag" "$peer_name" "$peer_port" --pair-with "$mac_name" --code-file "$WORK/$mac_tag.out" \
+        --pair-address "127.0.0.1:$(mac_port "$WORK/$mac_tag.out")"
     local peer_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^PAIRING_CODE [0-9]{6} FROM $peer_name" 30 "Mac показал код"
     expect "$WORK/$peer_tag.out" "^PAIRED $mac_name" 30 "двойник связан с Mac"
@@ -358,4 +414,80 @@ pair_mac_initiator() {
     stop "$mac_pid"
     stop "$peer_pid"
     fix_saved_ports "$mac_tag" "$peer_tag" "$peer_port"
+}
+
+# Связывание двух двойников: R показывает код, I вводит его. BIN_R/BIN_I — какие двойники (по умолчанию новые).
+# Новый двойник в роли I подключается к R по 127.0.0.1 (--pair-address), не дожидаясь mDNS: поиск двойников
+# через mDNS на этом Mac может не работать (VPN, сетевой фильтр). Затем обе стороны запоминают 127.0.0.1 и
+# настоящие порты друг друга (set_endpoint), а не порт по умолчанию 48620, занятый настоящим Clipvey.
+# pair_peers R_TAG R_NAME R_PORT I_TAG I_NAME I_PORT [BIN_R] [BIN_I]
+pair_peers() {
+    local r_tag="$1" r_name="$2" r_port="$3" i_tag="$4" i_name="$5" i_port="$6"
+    local r_bin="${7:-$PEER}" i_bin="${8:-$PEER}"
+    local direct=()
+    [ "$i_bin" = "$PEER" ] && direct=(--pair-address "127.0.0.1:$r_port")
+    rotate "$r_tag"
+    "$r_bin" run --data "$WORK/$r_tag" --name "$r_name" --port "$r_port" --seconds 600 --pair --auto-confirm \
+        >> "$WORK/$r_tag.out" 2>> "$WORK/$r_tag.err" &
+    local r_pid=$!
+    PIDS="$PIDS $r_pid"
+    expect "$WORK/$r_tag.out" "^READY " 20 "$r_name запущен (R)"
+    rotate "$i_tag"
+    "$i_bin" run --data "$WORK/$i_tag" --name "$i_name" --port "$i_port" --seconds 600 \
+        --pair-with "$r_name" --code-file "$WORK/$r_tag.out" ${direct[@]+"${direct[@]}"} \
+        >> "$WORK/$i_tag.out" 2>> "$WORK/$i_tag.err" &
+    local i_pid=$!
+    PIDS="$PIDS $i_pid"
+    expect "$WORK/$r_tag.out" "^PAIRING_CODE [0-9]{6} FROM $i_name" 30 "$r_name показал код"
+    expect "$WORK/$i_tag.out" "^PAIRED $r_name" 30 "$i_name связан с $r_name"
+    expect "$WORK/$r_tag.out" "^PAIRED $i_name" 30 "$r_name связан с $i_name"
+    stop "$i_pid"
+    stop "$r_pid"
+    set_endpoint "$r_tag" "$i_name" 127.0.0.1 "$i_port"
+    set_endpoint "$i_tag" "$r_name" 127.0.0.1 "$r_port"
+}
+
+# set_endpoint TAG DEVICE_NAME HOST PORT — запасной адрес устройства в devices.json двойника TAG.
+set_endpoint() {
+    python3 - "$WORK/$1/devices.json" "$2" "$3" "$4" <<'PY'
+import json, sys
+path, name, host, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+devices = json.load(open(path))
+found = [device for device in devices if device["Name"] == name]
+if not found:
+    sys.exit(f"в {path} нет устройства {name}")
+for device in found:
+    device["LastHost"], device["LastPort"] = host, port
+json.dump(devices, open(path, "w"), indent=2, ensure_ascii=False)
+PY
+}
+
+# make_png FILE BYTES [SEED] — настоящий PNG из шума примерно указанного размера (шум не сжимается).
+make_png() {
+    python3 - "$1" "$2" "${3:-1}" <<'PY'
+import os, random, struct, sys, zlib
+path, size, seed = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+width = 512
+height = max(1, size // (width * 3))
+random.seed(seed)
+row = lambda: b"\x00" + random.randbytes(width * 3)
+raw = b"".join(row() for _ in range(height))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) \
+    + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b"")
+open(path, "wb").write(png)
+PY
+}
+
+file_size() { stat -f %z "$1"; }
+file_sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+# expect_image FILE FROM IMAGE_FILE SECONDS ОПИСАНИЕ — дождаться «IMAGE FROM размер sha256» ровно один раз.
+expect_image() {
+    local file="$1" from="$2" image="$3"
+    local pattern="^IMAGE $from $(file_size "$image") $(file_sha "$image")\$"
+    expect "$file" "$pattern" "$4" "$5"
+    sleep 1
+    [ "$(count "$file" "$pattern")" -eq 1 ] || fail "$5: получено $(count "$file" "$pattern") раз"
 }

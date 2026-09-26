@@ -16,7 +16,8 @@ PEER_NAME="e2e-peer-$SUFFIX"
 start_mac mac "$MAC_NAME" "e2e-pb-$SUFFIX" --pair --auto-confirm
 MAC_PID=$LAST_PID
 expect "$WORK/mac.out" "^READY " 20 "Mac запущен"
-start_peer peer "$PEER_NAME" "$(free_port)" --pair-with "$MAC_NAME" --code-file "$WORK/wrong-1.txt"
+start_peer peer "$PEER_NAME" "$(free_port)" --pair-with "$MAC_NAME" --code-file "$WORK/wrong-1.txt" \
+    --pair-address "127.0.0.1:$(mac_port "$WORK/mac.out")"
 PEER_PID=$LAST_PID
 expect "$WORK/mac.out" "^PAIRING_CODE [0-9]{6} FROM $PEER_NAME" 30 "Mac показал код"
 wrong_code "$WORK/mac.out" > "$WORK/wrong-1.txt"
