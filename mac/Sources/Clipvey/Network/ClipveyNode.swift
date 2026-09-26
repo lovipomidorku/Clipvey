@@ -80,7 +80,8 @@ final class ClipveyNode {
     @ObservationIgnored private var connecting: Set<String> = []
     @ObservationIgnored private var seenClips: Set<String> = []
     @ObservationIgnored private var seenOrder: [String] = []
-    @ObservationIgnored private var pairingDeadline: Date?
+    /// Когда закроется режим связывания; вместе с ним прерывается и идущее связывание.
+    private(set) var pairingDeadline: Date?
     @ObservationIgnored private var pairingBusy = false
     @ObservationIgnored private var incomingLink: PeerLink?
     @ObservationIgnored private var incomingDecision: CheckedContinuation<Bool, Never>?

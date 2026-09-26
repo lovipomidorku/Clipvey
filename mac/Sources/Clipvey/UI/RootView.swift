@@ -216,15 +216,31 @@ private struct PairingSection: View {
         }
     }
 
+    /// Общая рамка связывания: заголовок с обратным отсчётом, шаги 1–2–3 и содержимое шага.
+    private func pairingCard<Content: View>(title: String, step: Int, showsCountdown: Bool = true, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionHeader(title: title)
+                Spacer()
+                if showsCountdown, let deadline = node.pairingDeadline {
+                    PairingCountdown(deadline: deadline, style: .remaining)
+                }
+            }
+            PairingSteps(current: step)
+            content()
+        }
+        .cardStyle()
+    }
+
     /// Роль R: этот Mac показывает код.
     private func incomingView(_ incoming: ClipveyNode.IncomingPairing) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: L("Связывание с «\(incoming.peerName)»", "Pairing with “\(incoming.peerName)”"))
+        pairingCard(title: L("Связывание с «\(incoming.peerName)»", "Pairing with “\(incoming.peerName)”"),
+                    step: incoming.verified ? 3 : 2,
+                    showsCountdown: incoming.code == nil) {
             if let code = incoming.code {
-                Text(Self.formatted(code))
-                    .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity)
+                CodeBlock(code: code, deadline: node.pairingDeadline)
+            } else {
+                progress(L("Подключение…", "Connecting…"))
             }
             Text(incoming.verified
                  ? L("«\(incoming.peerName)» подтвердил код ✓ Нажмите «Готово».", "“\(incoming.peerName)” confirmed the code ✓ Click Done.")
@@ -238,53 +254,57 @@ private struct PairingSection: View {
                 Button(L("Отмена", "Cancel")) { node.cancelIncoming() }
             }
         }
-        .cardStyle()
     }
 
     /// Роль I: пользователь вводит код с экрана другого устройства.
-    @ViewBuilder
     private func outgoingView(_ outgoing: ClipveyNode.OutgoingPairing) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let name: String
+        let step: Int
+        switch outgoing {
+        case .connecting(let peer), .enterCode(let peer):
+            name = peer
+            step = 2
+        case .waitingConfirmation(let peer):
+            name = peer
+            step = 3
+        }
+        return pairingCard(title: L("Связывание с «\(name)»", "Pairing with “\(name)”"), step: step) {
             switch outgoing {
-            case .connecting(let name):
-                SectionHeader(title: L("Связывание с «\(name)»", "Pairing with “\(name)”"))
-                Text(L("Подключение…", "Connecting…")).font(.callout)
-            case .enterCode(let name):
-                SectionHeader(title: L("Связывание с «\(name)»", "Pairing with “\(name)”"))
-                Text(L("Введите код с экрана «\(name)»:", "Enter the code shown on “\(name)”:")).font(.callout)
+            case .connecting:
+                progress(L("Подключение…", "Connecting…"))
+            case .enterCode:
+                Text(L("Введите код с экрана «\(name)»:", "Enter the code shown on “\(name)”:"))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    TextField("000000", text: Binding(
+                    TextField("000 000", text: Binding(
                         get: { model.codeInput },
                         set: { model.codeInput = String($0.filter { $0.isASCII && $0.isNumber }.prefix(6)) }
                     ))
-                    .font(.system(size: 20, design: .monospaced))
-                    .frame(width: 110)
+                    .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                    .frame(width: 130)
                     .onSubmit(submit)
                     Button(L("Подтвердить", "Confirm"), action: submit)
                         .disabled(model.codeInput.count != 6)
                         .keyboardShortcut(.defaultAction)
                 }
-            case .waitingConfirmation(let name):
-                SectionHeader(title: L("Связывание с «\(name)»", "Pairing with “\(name)”"))
-                Text(L("Код верный ✓ Нажмите «Готово» на «\(name)».", "Code is correct ✓ Click Done on “\(name)”.")).font(.callout)
+            case .waitingConfirmation:
+                Text(L("Код верный ✓ Нажмите «Готово» на «\(name)».", "Code is correct ✓ Click Done on “\(name)”."))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Button(L("Отмена", "Cancel")) { node.cancelOutgoing() }
         }
-        .cardStyle()
     }
 
     private var pairingModeView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: L("Режим связывания", "Pairing"))
+        pairingCard(title: L("Режим связывания", "Pairing"), step: node.candidates.isEmpty ? 1 : 2) {
             Text(L("Нажмите «Связать» и на другом компьютере. Затем выберите его здесь или этот Mac — там.",
                     "Click Pair on the other computer too. Then choose it here, or choose this Mac there."))
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
             if node.candidates.isEmpty {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(L("Поиск устройств…", "Looking for devices…")).font(.callout).foregroundStyle(.secondary)
-                }
+                progress(L("Поиск устройств…", "Looking for devices…"))
             } else {
                 ForEach(node.candidates) { candidate in
                     HStack {
@@ -299,17 +319,19 @@ private struct PairingSection: View {
             }
             Button(L("Закрыть", "Close")) { node.stopPairingMode() }
         }
-        .cardStyle()
+    }
+
+    private func progress(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(text).font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     private func submit() {
         guard model.codeInput.count == 6 else { return }
         node.submitCode(model.codeInput)
         model.codeInput = ""
-    }
-
-    private static func formatted(_ code: String) -> String {
-        "\(code.prefix(3)) \(code.suffix(3))"
     }
 }
 
