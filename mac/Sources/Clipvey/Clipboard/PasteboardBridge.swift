@@ -20,7 +20,7 @@ final class PasteboardBridge {
     private static let maxBytes = ProtocolLimits.maxClipBytes
     private static let jpegType = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
     private static let heicType = NSPasteboard.PasteboardType(UTType.heic.identifier)
-    /// Типы картинок в порядке предпочтения: PNG и JPEG как есть, HEIC → JPEG, TIFF → PNG.
+    /// Типы картинок: PNG и JPEG отправляются как есть, HEIC → JPEG, TIFF → PNG.
     private static let imageTypes: [NSPasteboard.PasteboardType] = [.png, jpegType, heicType, .tiff]
     /// Больше этого исходные данные даже не конвертируются (TIFF без сжатия бывает огромным).
     private static let maxSourceImageBytes = 256 * 1024 * 1024
@@ -89,7 +89,9 @@ final class PasteboardBridge {
         }
         let text = pasteboard.string(forType: .string)
         if shouldReadImages(), !types.contains(.fileURL), Self.textIsAuxiliary(text),
-           let imageType = Self.imageTypes.first(where: types.contains),
+           // Первый по порядку в буфере — тот, что положила программа; остальные macOS выводит из него сама
+           // (к PNG, например, добавляет TIFF), поэтому берём первый.
+           let imageType = types.first(where: Self.imageTypes.contains),
            let data = pasteboard.data(forType: imageType), !data.isEmpty {
             sendImage(data, type: imageType)
             return
