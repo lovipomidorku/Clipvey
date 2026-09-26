@@ -4,9 +4,16 @@ using static Clipvey.Windows.Localization;
 
 namespace Clipvey.Windows;
 
-/// Последняя синхронизация: когда и откуда (From — имя устройства; null — текст отправлен отсюда).
+/// Что передано: текст или картинка.
+internal enum SyncKind
+{
+    Text,
+    Image,
+}
+
+/// Последняя синхронизация: когда, откуда (From — имя устройства; null — отправлено отсюда) и что.
 /// Только в памяти, без содержимого.
-internal sealed record LastSync(DateTime Time, string? From);
+internal sealed record LastSync(DateTime Time, string? From, SyncKind Kind);
 
 /// Панель Clipvey у значка в трее: связанные устройства (с выключателями), связывание новых — в обеих ролях,
 /// настройки. Без рамки, не видна в панели задач, прячется при потере фокуса (кроме как во время связывания).
@@ -44,14 +51,35 @@ internal sealed partial class TrayPanel : Form
     /// Обновления: полоса «Доступна версия» и пункты настроек (UpdaterPanel.cs).
     private readonly Updater _updater;
 
+    /// Сменить своё имя и «Передавать картинки» (сохраняет TrayApplication).
+    private readonly Action<string> _rename;
+    private readonly Action<bool> _setImagesEnabled;
+
+    /// Поле «Имя этого компьютера». Живёт вместе с панелью (как поле кода): перестройка содержимого
+    /// только отцепляет его, поэтому набранный текст и курсор сохраняются.
+    private readonly TextBox _nameBox = new() { Name = "self-name", MaxLength = 63, BorderStyle = BorderStyle.FixedSingle };
+
+    /// Имя в поле изменено пользователем и ещё не сохранено.
+    private bool _nameDirty;
+    private bool _settingName;
+
+    /// Поле псевдонима и устройство, которое сейчас переименовывается (null — никакое).
+    private readonly TextBox _aliasBox = new() { Name = "alias", MaxLength = 63, BorderStyle = BorderStyle.FixedSingle };
+    private string? _renaming;
+
+    /// Идёт перестройка содержимого: потеря фокуса полем имени в это время — не повод сохранять.
+    private bool _rebuilding;
+
     /// Когда панель спряталась из-за потери фокуса (Environment.TickCount64).
     public long HiddenAt { get; private set; }
 
-    public TrayPanel(ClipveyNode node, Func<LastSync?> lastSync, Updater updater)
+    public TrayPanel(ClipveyNode node, Func<LastSync?> lastSync, Updater updater, Action<string> rename, Action<bool> setImagesEnabled)
     {
         _node = node;
         _lastSync = lastSync;
         _updater = updater;
+        _rename = rename;
+        _setImagesEnabled = setImagesEnabled;
         Text = "Clipvey";
         Icon = AppIcon.Load(new Size(32, 32));
         AutoScaleMode = AutoScaleMode.None;
@@ -81,6 +109,33 @@ internal sealed partial class TrayPanel : Form
             if (e.KeyCode == Keys.Enter)
             {
                 SubmitCode();
+                e.SuppressKeyPress = true;
+            }
+        };
+
+        _nameBox.TextChanged += (_, _) =>
+        {
+            if (!_settingName)
+                _nameDirty = true;
+        };
+        _nameBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                CommitName();
+                e.SuppressKeyPress = true;
+            }
+        };
+        _nameBox.Leave += (_, _) =>
+        {
+            if (!_rebuilding)
+                CommitName();
+        };
+        _aliasBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                CommitAlias();
                 e.SuppressKeyPress = true;
             }
         };
@@ -190,6 +245,13 @@ internal sealed partial class TrayPanel : Form
             ControlPaint.DrawBorder(e.Graphics, ClientRectangle, P.CardBorder, ButtonBorderStyle.Solid);
     }
 
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (!Visible)
+            CommitName();
+    }
+
     protected override void OnDeactivate(EventArgs e)
     {
         base.OnDeactivate(e);
@@ -203,11 +265,26 @@ internal sealed partial class TrayPanel : Form
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.KeyCode == Keys.Escape)
+        if (e.KeyCode != Keys.Escape)
+            return;
+        // Esc во время правки отменяет правку, а не прячет панель.
+        if (_renaming is not null)
+        {
+            _renaming = null;
+            RefreshContent();
+        }
+        else if (_nameBox.Focused && _nameDirty)
+        {
+            _nameDirty = false;
+            SetNameText(_node.Name);
+            _nameBox.SelectAll();
+        }
+        else
         {
             Hide();
-            e.Handled = true;
         }
+        e.Handled = true;
+        e.SuppressKeyPress = true;
     }
 
     /// Панель растёт и сжимается вместе с содержимым: угол у панели задач должен оставаться на месте.
@@ -248,9 +325,12 @@ internal sealed partial class TrayPanel : Form
         // Перестройка уничтожает элемент с фокусом — запоминаем его имя и возвращаем фокус.
         var focused = ContainsFocus ? FocusedControl()?.Name : null;
 
+        _rebuilding = true;
         SuspendLayout();
         _root.SuspendLayout();
         _codeBox.Parent?.Controls.Remove(_codeBox);
+        _nameBox.Parent?.Controls.Remove(_nameBox);
+        _aliasBox.Parent?.Controls.Remove(_aliasBox);
         Clear(_root);
         BackColor = P.Background;
         _root.BackColor = P.Background;
@@ -276,9 +356,11 @@ internal sealed partial class TrayPanel : Form
         if (focused is { Length: > 0 } && _root.Controls.Find(focused, searchAllChildren: true).FirstOrDefault() is { } restored)
         {
             restored.Focus();
-            if (restored is TextBox box)
+            // У полей имени и псевдонима курсор сохраняется сам (поле не пересоздаётся).
+            if (restored is TextBox box && box != _nameBox && box != _aliasBox)
                 box.SelectionStart = box.TextLength;
         }
+        _rebuilding = false;
     }
 
     private Control? FocusedControl()
@@ -310,6 +392,8 @@ internal sealed partial class TrayPanel : Form
     private void AddDevices()
     {
         var devices = _node.Devices;
+        if (_renaming is { } renaming && devices.All(device => device.DeviceId != renaming))
+            _renaming = null;
         var connected = devices.Count(device => device.Connected);
         AddSection(L("Устройства", "Devices"), devices.Count == 0
             ? null
@@ -349,15 +433,20 @@ internal sealed partial class TrayPanel : Form
             new Padding(S(2), 0, 0, S(2))));
     }
 
-    /// «Последняя синхронизация: 11:03 · от OFFICE-PC» / «… 11:05 · отправлено».
+    /// «Последняя синхронизация: 11:03 · текст от OFFICE-PC» / «… 11:05 · картинка отправлена».
     private string LastSyncText()
     {
         if (_lastSync() is not { } sync)
             return L("Синхронизаций пока не было", "No syncs yet");
         var time = sync.Time.Date == DateTime.Today ? sync.Time.ToString("t") : sync.Time.ToString("g");
-        return sync.From is { } from
-            ? L($"Последняя синхронизация: {time} · от {from}", $"Last sync: {time} · from {from}")
-            : L($"Последняя синхронизация: {time} · отправлено", $"Last sync: {time} · sent");
+        var what = (sync.Kind, sync.From) switch
+        {
+            (SyncKind.Image, { } from) => L($"картинка от {from}", $"image from {from}"),
+            (SyncKind.Image, null) => L("картинка отправлена", "image sent"),
+            (_, { } from) => L($"текст от {from}", $"text from {from}"),
+            _ => L("текст отправлен", "text sent"),
+        };
+        return L($"Последняя синхронизация: {time} · {what}", $"Last sync: {time} · {what}");
     }
 
     private int CardInnerWidth => Width96 - S(28);
@@ -370,23 +459,33 @@ internal sealed partial class TrayPanel : Form
         var dotColor = device.Connected ? P.Success
             : device.Enabled && device.Problem is not null ? P.Warning
             : P.Disabled;
-        var dot = NewLabel("●", Theme.Text(12, _dpi), dotColor, P.Card, S(20), new Padding(0, S(3), S(6), 0));
-        dot.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        dot.AccessibleName = "";
-        dot.AccessibleRole = AccessibleRole.None;
+        var icon = new DeviceIcon(device.Type, P, _dpi, P.Card, dotColor)
+        {
+            Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            Margin = new Padding(0, S(2), S(10), 0),
+        };
 
         var status = !device.Enabled ? L("синхронизация выключена", "sync is off")
             : device.Connected ? L("подключено", "connected")
             : device.Problem is { } problem ? FailureText(problem) : L("не в сети", "offline");
-        var textWidth = CardInnerWidth - S(20 + 6 + 52);
+        // Картинки этому устройству не уходят: у него они выключены или старая версия Clipvey.
+        if (device.Connected && device.Enabled && _node.ImagesEnabled && !device.AcceptsImages)
+            status += L(" · только текст", " · text only");
+        var textWidth = CardInnerWidth - S(28 + 10 + 52);
         var texts = NewColumn(P.Card);
-        texts.Controls.Add(NewLabel(device.Name, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, textWidth, new Padding(0)));
+        texts.Controls.Add(NewLabel(device.DisplayName, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, textWidth, new Padding(0)));
+        if (device.Alias is not null)
+        {
+            // Псевдоним задан — настоящее имя устройства видно второй строкой.
+            texts.Controls.Add(NewLabel(L($"Имя на устройстве: {device.Name}", $"Device name: {device.Name}"), Theme.Text(12, _dpi),
+                P.SecondaryText, P.Card, textWidth, new Padding(0, S(2), 0, 0)));
+        }
         texts.Controls.Add(NewLabel(status, Theme.Text(12, _dpi),
             device.Enabled && !device.Connected && device.Problem is not null ? P.Warning : P.SecondaryText,
             P.Card, textWidth, new Padding(0, S(2), 0, 0)));
         texts.Anchor = AnchorStyles.Left;
 
-        var toggle = new ToggleSwitch(P, _dpi, P.Card, L($"Синхронизация с «{device.Name}»", $"Sync with “{device.Name}”"))
+        var toggle = new ToggleSwitch(P, _dpi, P.Card, L($"Синхронизация с «{device.DisplayName}»", $"Sync with “{device.DisplayName}”"))
         {
             Checked = device.Enabled,
             Name = "toggle:" + device.DeviceId,
@@ -394,16 +493,48 @@ internal sealed partial class TrayPanel : Form
         };
         toggle.Toggled += (_, _) => _node.SetEnabled(device.DeviceId, toggle.Checked);
 
-        table.Controls.Add(dot, 0, 0);
+        table.Controls.Add(icon, 0, 0);
         table.Controls.Add(texts, 1, 0);
         table.Controls.Add(toggle, 2, 0);
 
         Control actions;
-        if (_confirmUnpair == device.DeviceId)
+        if (_renaming == device.DeviceId)
+        {
+            // Переименование прямо в карточке: MessageBox забрал бы фокус, и панель спряталась бы.
+            var editor = NewColumn(P.Card);
+            editor.Controls.Add(NewLabel(L("Имя на этом компьютере (другие устройства его не видят):", "Name on this PC (other devices don’t see it):"),
+                Theme.Text(13, _dpi), P.Text, P.Card, textWidth + S(52), new Padding(0, S(8), 0, S(4))));
+            StyleInput(_aliasBox, textWidth + S(52));
+            _aliasBox.AccessibleName = L($"Новое имя для «{device.Name}»", $"New name for “{device.Name}”");
+            _aliasBox.PlaceholderText = device.Name;
+            editor.Controls.Add(_aliasBox);
+            var buttons = new List<Control>
+            {
+                NewButton(L("Сохранить", "Save"), CommitAlias, ButtonKind.Accent, P.Card, "alias-save:" + device.DeviceId),
+            };
+            if (device.Alias is not null)
+            {
+                buttons.Add(NewButton(L("Сбросить", "Reset"), () =>
+                {
+                    _renaming = null;
+                    _node.SetAlias(device.DeviceId, "");
+                }, ButtonKind.Standard, P.Card, "alias-reset:" + device.DeviceId));
+            }
+            buttons.Add(NewButton(L("Отмена", "Cancel"), () =>
+            {
+                _renaming = null;
+                RefreshContent();
+            }, ButtonKind.Standard, P.Card, "alias-cancel:" + device.DeviceId));
+            var row = NewRow(P.Card, [.. buttons]);
+            row.Margin = new Padding(0, S(8), 0, 0);
+            editor.Controls.Add(row);
+            actions = editor;
+        }
+        else if (_confirmUnpair == device.DeviceId)
         {
             var question = NewColumn(P.Card);
-            question.Controls.Add(NewLabel(L($"Разорвать связь с «{device.Name}»? Чтобы снова синхронизироваться, их придётся связать заново.",
-                    $"Unpair “{device.Name}”? You’ll need to pair again to sync."),
+            question.Controls.Add(NewLabel(L($"Разорвать связь с «{device.DisplayName}»? Чтобы снова синхронизироваться, их придётся связать заново.",
+                    $"Unpair “{device.DisplayName}”? You’ll need to pair again to sync."),
                 Theme.Text(13, _dpi), P.Text, P.Card, textWidth + S(52), new Padding(0, S(8), 0, S(6))));
             question.Controls.Add(NewRow(P.Card,
                 NewButton(L("Разорвать связь", "Unpair"), () =>
@@ -420,11 +551,15 @@ internal sealed partial class TrayPanel : Form
         }
         else
         {
-            actions = NewButton(L("Разорвать связь", "Unpair"), () =>
+            var rename = NewButton(L("Переименовать…", "Rename…"), () => StartRename(device), ButtonKind.Subtle, P.Card, "rename:" + device.DeviceId);
+            rename.AccessibleName = L($"Переименовать «{device.DisplayName}»", $"Rename “{device.DisplayName}”");
+            var unpair = NewButton(L("Разорвать связь", "Unpair"), () =>
             {
                 _confirmUnpair = device.DeviceId;
+                _renaming = null;
                 RefreshContent();
             }, ButtonKind.Subtle, P.Card, "unpair:" + device.DeviceId);
+            actions = NewRow(P.Card, rename, unpair);
             actions.Margin = new Padding(0, S(4), 0, 0);
         }
         table.Controls.Add(actions, 1, 1);
@@ -432,6 +567,69 @@ internal sealed partial class TrayPanel : Form
 
         card.Controls.Add(table);
         return card;
+    }
+
+    private void StartRename(DeviceStatus device)
+    {
+        _renaming = device.DeviceId;
+        _confirmUnpair = null;
+        _aliasBox.Text = device.DisplayName;
+        RefreshContent();
+        _aliasBox.Focus();
+        _aliasBox.SelectAll();
+    }
+
+    /// Сохранить псевдоним. Пустой или совпадающий с настоящим именем — сброс.
+    private void CommitAlias()
+    {
+        if (_renaming is not { } deviceId)
+            return;
+        var device = _node.Devices.FirstOrDefault(d => d.DeviceId == deviceId);
+        _renaming = null;
+        if (device is null)
+        {
+            RefreshContent();
+            return;
+        }
+        var alias = ClipveyNode.NormalizeName(_aliasBox.Text);
+        if (alias == device.Name)
+            alias = "";
+        if (alias == (device.Alias ?? ""))
+            RefreshContent();
+        else
+            _node.SetAlias(deviceId, alias);
+    }
+
+    /// Сохранить своё имя (Enter, потеря фокуса, скрытие панели). Пустое — имя компьютера. Без изменений — ничего.
+    private void CommitName()
+    {
+        if (!_nameDirty)
+            return;
+        _nameDirty = false;
+        var name = ClipveyNode.NormalizeName(_nameBox.Text);
+        var effective = ClipveyNode.NormalizeName(name.Length > 0 ? name : Environment.MachineName);
+        if (effective != _node.Name || (name.Length == 0) != (AppSettings.DeviceName is null))
+            _rename(name);
+        SetNameText(_node.Name);
+        _nameBox.SelectionStart = _nameBox.TextLength;
+    }
+
+    private void SetNameText(string text)
+    {
+        if (_nameBox.Text == text)
+            return;
+        _settingName = true;
+        _nameBox.Text = text;
+        _settingName = false;
+    }
+
+    private void StyleInput(TextBox box, int width)
+    {
+        box.Font = Theme.Text(14, _dpi);
+        box.BackColor = P.Input;
+        box.ForeColor = P.Text;
+        box.Width = width;
+        box.Margin = new Padding(0);
     }
 
     // MARK: - Связывание
@@ -448,7 +646,7 @@ internal sealed partial class TrayPanel : Form
         if (_node.IncomingPairing is { } incoming)
         {
             // Роль R: этот компьютер показывает код.
-            column.Controls.Add(Strong(L($"Связывание с «{incoming.PeerName}»", $"Pairing with “{incoming.PeerName}”")));
+            column.Controls.Add(WithIcon(incoming.PeerType, Strong(L($"Связывание с «{incoming.PeerName}»", $"Pairing with “{incoming.PeerName}”"))));
             column.Controls.Add(NewLabel(
                 incoming.Code is { } code ? $"{code[..3]} {code[3..]}" : "…",
                 Theme.Mono(34, _dpi, FontStyle.Bold), P.Text, P.Card, width, new Padding(0, S(6), 0, S(6))));
@@ -494,13 +692,20 @@ internal sealed partial class TrayPanel : Form
             foreach (var candidate in candidates)
             {
                 var row = NewTable(width, P.Card, new Padding(0, S(4), 0, S(4)));
-                var name = NewLabel(candidate.Name, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, width - S(110), new Padding(0));
+                var candidateIcon = new DeviceIcon(candidate.Type, P, _dpi, P.Card, dot: null)
+                {
+                    Anchor = AnchorStyles.Left,
+                    Margin = new Padding(0, 0, S(10), 0),
+                };
+                row.Controls.Add(candidateIcon, 0, 0);
+                var name = NewLabel(candidate.Name, Theme.Text(14, _dpi, FontStyle.Bold), P.Text, P.Card, width - S(110 + 38), new Padding(0));
                 name.Anchor = AnchorStyles.Left;
+                name.Margin = new Padding(0);
                 var pair = NewButton(L("Связать", "Pair"), () => StartOutgoing(candidate), ButtonKind.Accent, P.Card,
                     "candidate:" + (candidate.DeviceId ?? candidate.Name));
                 pair.Anchor = AnchorStyles.Right;
                 pair.Margin = new Padding(0);
-                row.Controls.Add(name, 0, 0);
+                row.Controls.Add(name, 1, 0);
                 row.Controls.Add(pair, 2, 0);
                 column.Controls.Add(row);
             }
@@ -514,6 +719,23 @@ internal sealed partial class TrayPanel : Form
                 _node.StartPairingMode();
             }, ButtonKind.Accent, P.Card, "pairing-start"));
         }
+    }
+
+    /// Значок типа устройства слева от заголовка.
+    private Control WithIcon(DeviceType type, Label label)
+    {
+        var row = NewTable(CardInnerWidth, P.Card, new Padding(0, 0, 0, S(4)));
+        var icon = new DeviceIcon(type, P, _dpi, P.Card, dot: null)
+        {
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, S(10), 0),
+        };
+        label.MaximumSize = new Size(CardInnerWidth - S(38), 0);
+        label.Margin = new Padding(0);
+        label.Anchor = AnchorStyles.Left;
+        row.Controls.Add(icon, 0, 0);
+        row.Controls.Add(label, 1, 0);
+        return row;
     }
 
     private Label Strong(string text) =>
@@ -596,8 +818,23 @@ internal sealed partial class TrayPanel : Form
     {
         AddSection(L("Настройки", "Settings"));
         var card = NewCard();
-        var table = NewTable(CardInnerWidth, P.Card, new Padding(0));
+        var column = NewColumn(P.Card);
         var labelWidth = CardInnerWidth - S(150);
+
+        // Своё имя: другие устройства видят его в списке и при связывании.
+        var nameTitle = L("Имя этого компьютера", "This PC’s name");
+        column.Controls.Add(NewLabel(nameTitle, Theme.Text(14, _dpi), P.Text, P.Card, CardInnerWidth, new Padding(0, 0, 0, S(4))));
+        StyleInput(_nameBox, CardInnerWidth);
+        _nameBox.AccessibleName = nameTitle;
+        _nameBox.PlaceholderText = Environment.MachineName;
+        if (!_nameDirty)
+            SetNameText(_node.Name);
+        column.Controls.Add(_nameBox);
+        column.Controls.Add(NewLabel(L("Enter — сохранить. Пустое поле — имя компьютера в Windows.",
+                "Press Enter to save. Leave empty to use the Windows computer name."),
+            Theme.Text(12, _dpi), P.SecondaryText, P.Card, CardInnerWidth, new Padding(0, S(4), 0, S(12))));
+
+        var table = NewTable(CardInnerWidth, P.Card, new Padding(0));
 
         var autostartText = L("Запускать при входе в Windows", "Start with Windows");
         var autostartLabel = NewLabel(autostartText, Theme.Text(14, _dpi), P.Text, P.Card, labelWidth, new Padding(0));
@@ -623,6 +860,26 @@ internal sealed partial class TrayPanel : Form
         table.Controls.Add(autostartLabel, 0, 0);
         table.Controls.Add(autostart, 2, 0);
 
+        var imagesText = L("Передавать картинки", "Share images");
+        var imagesLabels = NewColumn(P.Card);
+        imagesLabels.Margin = new Padding(0, S(10), 0, 0);
+        imagesLabels.Anchor = AnchorStyles.Left;
+        imagesLabels.Controls.Add(NewLabel(imagesText, Theme.Text(14, _dpi), P.Text, P.Card, CardInnerWidth - S(60), new Padding(0)));
+        imagesLabels.Controls.Add(NewLabel(L("До 20 МБ, только устройствам, где картинки тоже включены",
+                "Up to 20 MB, only with devices that have images turned on too"),
+            Theme.Text(12, _dpi), P.SecondaryText, P.Card, CardInnerWidth - S(60), new Padding(0, S(2), 0, 0)));
+        var images = new ToggleSwitch(P, _dpi, P.Card, imagesText)
+        {
+            Checked = _node.ImagesEnabled,
+            Name = "images",
+            Anchor = AnchorStyles.Right,
+            Margin = new Padding(S(8), S(10), 0, 0),
+        };
+        images.Toggled += (_, _) => _setImagesEnabled(images.Checked);
+        table.Controls.Add(imagesLabels, 0, 1);
+        table.SetColumnSpan(imagesLabels, 2);
+        table.Controls.Add(images, 2, 1);
+
         var languageLabel = NewLabel(L("Язык", "Language"), Theme.Text(14, _dpi), P.Text, P.Card, labelWidth, new Padding(0, S(10), 0, 0));
         languageLabel.Anchor = AnchorStyles.Left;
         var current = TrayApplication.LanguageChoices().First(choice => choice.Value == Setting).Title;
@@ -631,10 +888,11 @@ internal sealed partial class TrayPanel : Form
         language.Anchor = AnchorStyles.Right;
         language.Margin = new Padding(0, S(10), 0, 0);
         language.Click += (_, _) => ShowLanguageMenu(language);
-        table.Controls.Add(languageLabel, 0, 1);
-        table.Controls.Add(language, 2, 1);
+        table.Controls.Add(languageLabel, 0, 2);
+        table.Controls.Add(language, 2, 2);
 
-        card.Controls.Add(table);
+        column.Controls.Add(table);
+        card.Controls.Add(column);
         _root.Controls.Add(card);
     }
 
