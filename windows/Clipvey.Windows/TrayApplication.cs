@@ -17,6 +17,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly SynchronizationContext _ui;
     private ToolStripMenuItem? _statusItem;
     private TrayPanel? _form;
+    private LastSync? _lastSync;
 
     public TrayApplication()
     {
@@ -41,7 +42,11 @@ internal sealed class TrayApplication : ApplicationContext
         Theme.Start(_ui);
         Theme.Changed += OnThemeChanged;
 
-        _node.ClipReceived += (text, _) => OnUi(() => _watcher.WriteRemote(text));
+        _node.ClipReceived += (text, from) => OnUi(() =>
+        {
+            _watcher.WriteRemote(text);
+            NoteSync(new LastSync(DateTime.Now, from));
+        });
         _node.Changed += () => OnUi(Refresh);
         _node.IncomingPairingChanged += incoming => OnUi(() =>
         {
@@ -128,8 +133,20 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void OnLocalCopy(string text)
     {
-        if (_node.Devices.Any(device => device.Connected))
-            _ = _node.BroadcastClipAsync(text);
+        if (!_node.Devices.Any(device => device.Connected))
+            return;
+        _ = _node.BroadcastClipAsync(text);
+        // «Отправлено» — приблизительно: ошибки отправки узел пишет в журнал, но наружу не сообщает.
+        // Слишком длинный текст узел не отправляет — его не отмечаем.
+        if (System.Text.Encoding.UTF8.GetByteCount(text) <= Protocol.MaxClipBytes)
+            NoteSync(new LastSync(DateTime.Now, From: null));
+    }
+
+    private void NoteSync(LastSync sync)
+    {
+        _lastSync = sync;
+        if (_form is { Visible: true })
+            _form.RefreshContent();
     }
 
     private void OnUi(Action action) => _ui.Post(_ => action(), null);
@@ -170,7 +187,7 @@ internal sealed class TrayApplication : ApplicationContext
     private void ShowForm()
     {
         if (_form is null || _form.IsDisposed)
-            _form = new TrayPanel(_node);
+            _form = new TrayPanel(_node, () => _lastSync);
         _form.ShowPanel();
     }
 

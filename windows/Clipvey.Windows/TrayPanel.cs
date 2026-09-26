@@ -4,6 +4,10 @@ using static Clipvey.Windows.Localization;
 
 namespace Clipvey.Windows;
 
+/// Последняя синхронизация: когда и откуда (From — имя устройства; null — текст отправлен отсюда).
+/// Только в памяти, без содержимого.
+internal sealed record LastSync(DateTime Time, string? From);
+
 /// Панель Clipvey у значка в трее: связанные устройства (с выключателями), связывание новых — в обеих ролях,
 /// настройки. Без рамки, не видна в панели задач, прячется при потере фокуса (кроме как во время связывания).
 /// Закрытие только прячет панель: программа продолжает работать в трее.
@@ -34,12 +38,16 @@ internal sealed class TrayPanel : Form
     private bool _roundedByDwm;
     private bool _loggedLook;
 
+    /// Последняя синхронизация (null — ещё не было). Её помнит TrayApplication.
+    private readonly Func<LastSync?> _lastSync;
+
     /// Когда панель спряталась из-за потери фокуса (Environment.TickCount64).
     public long HiddenAt { get; private set; }
 
-    public TrayPanel(ClipveyNode node)
+    public TrayPanel(ClipveyNode node, Func<LastSync?> lastSync)
     {
         _node = node;
+        _lastSync = lastSync;
         Text = "Clipvey";
         Icon = AppIcon.Load(new Size(32, 32));
         AutoScaleMode = AutoScaleMode.None;
@@ -302,6 +310,19 @@ internal sealed class TrayPanel : Form
         }
         foreach (var device in devices)
             target.Controls.Add(DeviceCard(device));
+        _root.Controls.Add(NewLabel(LastSyncText(), Theme.Text(12, _dpi), P.SecondaryText, P.Background, Width96,
+            new Padding(S(2), 0, 0, S(2))));
+    }
+
+    /// «Последняя синхронизация: 11:03 · от OFFICE-PC» / «… 11:05 · отправлено».
+    private string LastSyncText()
+    {
+        if (_lastSync() is not { } sync)
+            return L("Синхронизаций пока не было", "No syncs yet");
+        var time = sync.Time.Date == DateTime.Today ? sync.Time.ToString("t") : sync.Time.ToString("g");
+        return sync.From is { } from
+            ? L($"Последняя синхронизация: {time} · от {from}", $"Last sync: {time} · from {from}")
+            : L($"Последняя синхронизация: {time} · отправлено", $"Last sync: {time} · sent");
     }
 
     private int CardInnerWidth => Width96 - S(28);
