@@ -4,12 +4,16 @@
 
 Синхронизирует буфер обмена (текст и картинки) между Mac и Windows в локальной сети.
 
-## Установка
+## Скачать
 
-- **Mac** (macOS 14+): `mac/scripts/build.sh --install` → `~/Applications/Clipvey.app`, значок в строке меню.
-- **Windows** 10/11 x64: `windows/publish.sh` → `dist/windows/Clipvey.exe`, один файл, установка не нужна.
+- **Mac** (macOS 14+, Apple Silicon и Intel): [Clipvey.dmg](https://github.com/lovipomidorku/Clipvey/releases/latest/download/Clipvey.dmg) — перетащите Clipvey в «Программы».
+- **Windows** 10/11 x64: [Clipvey.exe](https://github.com/lovipomidorku/Clipvey/releases/latest/download/Clipvey.exe) — один файл, установка не нужна.
 
-При первом запуске разрешите: на Mac — доступ к локальной сети и к буферу обмена («Всегда разрешать» в «Конфиденциальность и безопасность»), на Windows — частные сети в брандмауэре. Exe не подписан: в SmartScreen нажмите «Подробнее» → «Выполнить в любом случае».
+Программы пока не подписаны. Mac: при первом запуске откройте «Системные настройки» → «Конфиденциальность и безопасность» и нажмите «Всё равно открыть». Windows: в SmartScreen нажмите «Подробнее» → «Выполнить в любом случае».
+
+При первом запуске разрешите на Mac доступ к локальной сети и к буферу обмена («Всегда разрешать»), на Windows — частные сети в брандмауэре.
+
+Сборка из исходников: `mac/scripts/build.sh --install`, `windows/publish.sh`.
 
 ## Использование
 

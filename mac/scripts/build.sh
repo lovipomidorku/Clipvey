@@ -2,6 +2,7 @@
 # Сборка приложения: swift build → .app → подпись (ad-hoc, для запуска на этом Mac).
 #   scripts/build.sh            собрать в build/
 #   scripts/build.sh --install  собрать, установить в ~/Applications и запустить
+#   UNIVERSAL=1 scripts/build.sh  универсальная сборка arm64 + x86_64 (для релиза)
 set -euo pipefail
 
 APP_NAME="Clipvey"
@@ -20,6 +21,9 @@ fi
 
 # Пути к исходникам заменяются на «.», чтобы в бинарник не попали локальные папки.
 SWIFT_FLAGS=(-c release -Xswiftc -file-prefix-map -Xswiftc "$ROOT=.")
+if [[ "${UNIVERSAL:-}" == "1" ]]; then
+    SWIFT_FLAGS+=(--arch arm64 --arch x86_64)
+fi
 swift build "${SWIFT_FLAGS[@]}"
 BIN_DIR="$(swift build "${SWIFT_FLAGS[@]}" --show-bin-path)"
 

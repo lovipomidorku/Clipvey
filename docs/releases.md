@@ -6,13 +6,14 @@
 
 - Единственный источник — файл `VERSION` в корне: одна строка вида `0.2.0` (семантическое версионирование, без `v`).
 - `mac/scripts/build.sh` и `windows/Directory.Build.props` (для всех проектов .NET) читают версию из него.
-- Тег релиза — `v` + версия, например `v0.2.0`.
+- Тег релиза — `v` + версия, например `v0.2.0`. Его создаёт workflow `release.yml`: при push в `main`, если релиза для версии из `VERSION` ещё нет. Новый релиз — поднять `VERSION` и запушить.
 
 ## Файлы релиза
 
 | Файл | Что это |
 |---|---|
-| `Clipvey-mac.zip` | `Clipvey.app`, упакованный `ditto -c -k --keepParent` |
+| `Clipvey.dmg` | Для скачивания людьми: `Clipvey.app` (arm64 + x86_64) и ссылка на `/Applications` |
+| `Clipvey-mac.zip` | `Clipvey.app`, упакованный `ditto -c -k --keepParent`; его берёт автообновление |
 | `Clipvey.exe` | Windows x64, один файл |
 | `SHA256SUMS` | Строки `<sha256 hex строчными>  <имя файла>` (два пробела), по одной на каждый файл выше, `\n` в конце каждой строки |
 | `SHA256SUMS.sig` | Подпись `SHA256SUMS`: base64 от 64 байт `r ‖ s`, ECDSA P-256 с SHA-256 |

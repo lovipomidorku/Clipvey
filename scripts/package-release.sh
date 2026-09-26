@@ -2,7 +2,8 @@
 # Файлы релиза по docs/releases.md из уже собранных частей:
 #   mac/build/Clipvey.app     (mac/scripts/build.sh)
 #   dist/windows/Clipvey.exe  (windows/publish.sh или dotnet publish)
-# Результат — dist/release/: Clipvey-mac.zip, Clipvey.exe, SHA256SUMS и, если задан ключ, SHA256SUMS.sig.
+# Результат — dist/release/: Clipvey.dmg (для людей), Clipvey-mac.zip (для обновлений), Clipvey.exe,
+# SHA256SUMS и, если задан ключ, SHA256SUMS.sig.
 #
 #   scripts/package-release.sh [--key-file FILE]
 # Ключ подписи — переменная CLIPVEY_SIGNING_KEY или --key-file (base64 от 32 байт, см. scripts/sign-release.swift).
@@ -32,10 +33,17 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$A
 rm -rf "$OUT"
 mkdir -p "$OUT"
 ditto -c -k --keepParent "$APP" "$OUT/Clipvey-mac.zip"
+
+# DMG: приложение и ссылка на «Программы», чтобы установить перетаскиванием.
+DMG_DIR="$(mktemp -d)"
+trap 'rm -rf "$DMG_DIR"' EXIT
+ditto "$APP" "$DMG_DIR/Clipvey.app"
+ln -s /Applications "$DMG_DIR/Applications"
+hdiutil create -quiet -volname "Clipvey $VERSION" -srcfolder "$DMG_DIR" -fs HFS+ -format UDZO -ov "$OUT/Clipvey.dmg"
 cp "$EXE" "$OUT/Clipvey.exe"
 
 # «<sha256>  <имя>» — два пробела, \n в конце каждой строки; имена без пути.
-(cd "$OUT" && shasum -a 256 Clipvey-mac.zip Clipvey.exe > SHA256SUMS)
+(cd "$OUT" && shasum -a 256 Clipvey.dmg Clipvey-mac.zip Clipvey.exe > SHA256SUMS)
 
 if [ ${#KEY_ARGS[@]} -gt 0 ] || [ -n "${CLIPVEY_SIGNING_KEY:-}" ]; then
     "${SIGN[@]}" sign "$OUT/SHA256SUMS" ${KEY_ARGS[@]+"${KEY_ARGS[@]}"}

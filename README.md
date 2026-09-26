@@ -4,12 +4,16 @@
 
 Syncs the clipboard (text and images) between Mac and Windows over the local network.
 
-## Install
+## Download
 
-- **Mac** (macOS 14+): `mac/scripts/build.sh --install` → `~/Applications/Clipvey.app`, icon in the menu bar.
-- **Windows** 10/11 x64: `windows/publish.sh` → `dist/windows/Clipvey.exe`, a single file, no installation needed.
+- **Mac** (macOS 14+, Apple Silicon and Intel): [Clipvey.dmg](https://github.com/lovipomidorku/Clipvey/releases/latest/download/Clipvey.dmg) — drag Clipvey to Applications.
+- **Windows** 10/11 x64: [Clipvey.exe](https://github.com/lovipomidorku/Clipvey/releases/latest/download/Clipvey.exe) — a single file, no installation needed.
 
-On first launch allow: local network access and clipboard access on Mac ("Always Allow" in Privacy & Security), private networks in Windows Firewall. The exe is unsigned: in SmartScreen click "More info" → "Run anyway".
+The apps are not signed yet. Mac: on first launch open System Settings → Privacy & Security and click "Open Anyway". Windows: in SmartScreen click "More info" → "Run anyway".
+
+On first launch allow local network and clipboard access on Mac ("Always Allow"), and private networks in Windows Firewall.
+
+Build from source: `mac/scripts/build.sh --install`, `windows/publish.sh`.
 
 ## Usage
 
