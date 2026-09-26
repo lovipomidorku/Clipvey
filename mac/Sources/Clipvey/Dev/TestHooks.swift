@@ -11,6 +11,10 @@ import AppKit
 ///   --code-file FILE       взять код для роли I из файла со строкой «PAIRING_CODE 123456»
 ///   --send TEXT            после подключения отправить текст (--send-delay N — подождать ещё N с)
 ///   --exit-after N         выйти через N секунд
+///   --update-url URL       адрес releases/latest вместо GitHub (допускается http://127.0.0.1)
+///   --update-public-key B64  открытый ключ подписи релизов вместо зашитого (одноразовый ключ проверок)
+///   --update-now           сразу проверить обновления и, если есть новая версия, установить без вопроса
+///   --update-check-delay N первая автоматическая проверка через N секунд вместо 60
 @MainActor
 enum TestHooks {
     static private(set) var enabled = false
@@ -24,6 +28,10 @@ enum TestHooks {
     private static var sendText: String?
     private static var sendDelay: Double = 0
     private static var exitAfter: Double?
+    static private(set) var updateURL: URL?
+    static private(set) var updatePublicKey: String?
+    static private(set) var updateNow = false
+    static private(set) var updateCheckDelay: Double?
 
     static func parse(_ arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -42,11 +50,21 @@ enum TestHooks {
         sendText = value("--send")
         sendDelay = value("--send-delay").flatMap(Double.init) ?? 0
         exitAfter = value("--exit-after").flatMap(Double.init)
+        updateURL = value("--update-url").flatMap(URL.init(string:))
+        updatePublicKey = value("--update-public-key")
+        updateNow = arguments.contains("--update-now")
+        updateCheckDelay = value("--update-check-delay").flatMap(Double.init)
     }
 
     static func emit(_ line: String) {
         print(line.replacingOccurrences(of: "\n", with: "\\n"))
         fflush(stdout)
+    }
+
+    static func emitIfEnabled(_ line: String) {
+        if enabled {
+            emit(line)
+        }
     }
 
     /// До запуска узла: подписаться на события.

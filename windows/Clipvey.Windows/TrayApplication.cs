@@ -18,6 +18,7 @@ internal sealed class TrayApplication : ApplicationContext
     private ToolStripMenuItem? _statusItem;
     private TrayPanel? _form;
     private LastSync? _lastSync;
+    private readonly Updater _updater;
 
     public TrayApplication()
     {
@@ -67,6 +68,17 @@ internal sealed class TrayApplication : ApplicationContext
 
         _node.Start();
         Refresh();
+
+        _updater = new Updater(() => OnUi(Quit));
+        _updater.Changed += () => OnUi(() =>
+        {
+            if (_form is { Visible: true })
+                _form.RefreshContent();
+        });
+        _updater.UpdateFound += version => OnUi(() => _tray.ShowBalloonTip(15000, "Clipvey",
+            L($"Доступна версия {version} — обновить?", $"Version {version} is available. Update?"), ToolTipIcon.Info));
+        _tray.BalloonTipClicked += (_, _) => OnUi(ShowForm);
+        _updater.Start();
     }
 
     /// Меню по правой кнопке. Пересобирается целиком при смене языка.
@@ -190,7 +202,7 @@ internal sealed class TrayApplication : ApplicationContext
     private void ShowForm()
     {
         if (_form is null || _form.IsDisposed)
-            _form = new TrayPanel(_node, () => _lastSync);
+            _form = new TrayPanel(_node, () => _lastSync, _updater);
         _form.ShowPanel();
     }
 
@@ -221,6 +233,7 @@ internal sealed class TrayApplication : ApplicationContext
         _tray.Dispose();
         _icons.Dispose();
         _watcher.Dispose();
+        _updater.Dispose();
         _form?.Dispose();
         try
         {

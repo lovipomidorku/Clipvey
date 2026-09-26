@@ -15,7 +15,7 @@ internal sealed record LastSync(DateTime Time, string? From);
 /// Содержимое целиком перестраивается в RefreshContent (смена данных, языка, темы, DPI).
 /// Сама форма при этом не пересоздаётся: на ней держится состояние исходящего связывания.
 /// Размеры — в пикселях при 96 DPI, пересчитываются через S() по DPI монитора панели.
-internal sealed class TrayPanel : Form
+internal sealed partial class TrayPanel : Form
 {
     private const int ContentWidth = 344;
 
@@ -41,13 +41,17 @@ internal sealed class TrayPanel : Form
     /// Последняя синхронизация (null — ещё не было). Её помнит TrayApplication.
     private readonly Func<LastSync?> _lastSync;
 
+    /// Обновления: полоса «Доступна версия» и пункты настроек (UpdaterPanel.cs).
+    private readonly Updater _updater;
+
     /// Когда панель спряталась из-за потери фокуса (Environment.TickCount64).
     public long HiddenAt { get; private set; }
 
-    public TrayPanel(ClipveyNode node, Func<LastSync?> lastSync)
+    public TrayPanel(ClipveyNode node, Func<LastSync?> lastSync, Updater updater)
     {
         _node = node;
         _lastSync = lastSync;
+        _updater = updater;
         Text = "Clipvey";
         Icon = AppIcon.Load(new Size(32, 32));
         AutoScaleMode = AutoScaleMode.None;
@@ -236,11 +240,13 @@ internal sealed class TrayPanel : Form
         Font = Theme.Text(14, _dpi);
 
         _root.Controls.Add(NewLabel("Clipvey", Theme.Title(20, _dpi), P.Text, P.Background, Width96, new Padding(0, 0, 0, S(4))));
+        AddUpdateBanner();
         AddDevices();
         AddPairing();
         if (_result.Length > 0)
             _root.Controls.Add(NewLabel(_result, Theme.Text(13, _dpi), P.SecondaryText, P.Background, Width96, new Padding(S(2), S(2), 0, S(4))));
         AddSettings();
+        AddUpdateSettings();
         _root.Controls.Add(NewLabel(
             L($"Этот компьютер: {_node.Name} · порт {_node.Port}", $"This PC: {_node.Name} · port {_node.Port}"),
             Theme.Text(12, _dpi), P.SecondaryText, P.Background, Width96, new Padding(S(2), S(8), 0, 0)));

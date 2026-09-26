@@ -36,6 +36,21 @@ internal static class AppSettings
         });
     }
 
+    /// «Проверять обновления автоматически» (по умолчанию включено).
+    public static bool CheckUpdatesAutomatically
+    {
+        get => Read("checkUpdatesAutomatically") != "false";
+        set => Write("checkUpdatesAutomatically", value ? "true" : "false");
+    }
+
+    /// Время последней проверки обновлений (ISO 8601).
+    public static DateTimeOffset? LastUpdateCheck
+    {
+        get => DateTimeOffset.TryParse(Read("lastUpdateCheck"), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var time) ? time : null;
+        set => Write("lastUpdateCheck", value?.ToString("o", System.Globalization.CultureInfo.InvariantCulture) ?? "");
+    }
+
     private static string? Read(string key)
     {
         try

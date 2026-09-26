@@ -336,6 +336,70 @@ var failures: [String] = []
     }
 }
 
+// MARK: - Обновления (docs/releases.md)
+
+/// Разбор версии и ответа releases/latest, SHA256SUMS, подпись и хеш — как в Updater.
+@MainActor func verifyReleaseChecks(_ v: [String: Any]) {
+    func version(_ text: String) -> String { ReleaseVersion(text)?.description ?? "nil" }
+    expectEqual("версия: v0.2.0", version("v0.2.0"), "0.2.0")
+    expectEqual("версия: 10.0.1", version("10.0.1"), "10.0.1")
+    for bad in ["", "1.2", "1.2.3.4", "v1.2.x", "1.2.3-beta", "1..3", " v1.2.3x", "+1.2.3", "１.2.3"] {
+        check("версия отвергается: «\(bad)»", ReleaseVersion(bad) == nil)
+    }
+    let ordered = ["0.1.0", "0.1.1", "0.2.0", "0.10.0", "1.0.0", "1.0.10"].compactMap(ReleaseVersion.init)
+    check("версии сравниваются как числа", ordered == ordered.sorted() && ordered.count == 6)
+    check("равные версии не новее", !(ReleaseVersion("v0.1.0")! > ReleaseVersion("0.1.0")!))
+
+    let json = #"""
+    {"tag_name":"v0.2.0","draft":false,"assets":[
+      {"name":"Clipvey-mac.zip","browser_download_url":"https://github.com/o/r/releases/download/v0.2.0/Clipvey-mac.zip"},
+      {"name":"SHA256SUMS","browser_download_url":"https://github.com/o/r/releases/download/v0.2.0/SHA256SUMS"},
+      {"name":"SHA256SUMS.sig","browser_download_url":"https://github.com/o/r/releases/download/v0.2.0/SHA256SUMS.sig","size":88}],
+     "extra":{"x":1}}
+    """#
+    if let release = try? ReleaseInfo.parse(Data(json.utf8)) {
+        expectEqual("releases/latest: тег", release.tag, "v0.2.0")
+        expectEqual("releases/latest: версия", release.version.description, "0.2.0")
+        expectEqual("releases/latest: файлы", release.assets.keys.sorted().joined(separator: ","), "Clipvey-mac.zip,SHA256SUMS,SHA256SUMS.sig")
+    } else {
+        check("releases/latest: разбор", false)
+    }
+    for bad in [#"{"assets":[]}"#, #"{"tag_name":"latest"}"#, "[]", "не json"] {
+        check("releases/latest отвергается: \(bad)", (try? ReleaseInfo.parse(Data(bad.utf8))) == nil)
+    }
+
+    guard let release = v["release_signature"] as? [String: String] else {
+        check("release_signature в vectors.json", false)
+        return
+    }
+    let message = Data(release["message"]!.utf8)
+    let signature = Data(release["signature"]!.utf8)
+    let key = release["public_key"]!
+    let sums = try? ReleaseVerifier.verifiedChecksums(sums: message, signature: signature + Data("\n".utf8), publicKeyBase64: key)
+    expectEqual("SHA256SUMS: подпись и разбор", sums?["Clipvey.exe"] ?? "nil", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
+    check("SHA256SUMS: изменённый текст отвергается",
+          (try? ReleaseVerifier.verifiedChecksums(sums: message + Data("x".utf8), signature: signature, publicKeyBase64: key)) == nil)
+    check("SHA256SUMS: чужой ключ отвергается",
+          (try? ReleaseVerifier.verifiedChecksums(sums: message, signature: signature)) == nil)
+    var tampered = Data(base64Encoded: release["signature"]!)!
+    tampered[5] ^= 1
+    check("SHA256SUMS: испорченная подпись отвергается",
+          (try? ReleaseVerifier.verifiedChecksums(sums: message, signature: Data(tampered.base64EncodedString().utf8), publicKeyBase64: key)) == nil)
+    check("SHA256SUMS: подпись не base64 отвергается",
+          (try? ReleaseVerifier.verifiedChecksums(sums: message, signature: Data("***".utf8), publicKeyBase64: key)) == nil)
+
+    let file = Data("новая версия".utf8)
+    let hash = SHA256.hash(data: file).map { String(format: "%02x", $0) }.joined()
+    let list = try? ReleaseVerifier.parseChecksums(Data("\(hash)  Clipvey-mac.zip\n".utf8))
+    check("хеш файла совпадает", list.map { (try? ReleaseVerifier.verifyFile(file, name: "Clipvey-mac.zip", checksums: $0)) != nil } ?? false)
+    check("изменённый файл отвергается", list.map { (try? ReleaseVerifier.verifyFile(file + Data([0]), name: "Clipvey-mac.zip", checksums: $0)) == nil } ?? false)
+    check("файла нет в SHA256SUMS", list.map { (try? ReleaseVerifier.verifyFile(file, name: "Clipvey.exe", checksums: $0)) == nil } ?? false)
+    for bad in ["\(hash)  Clipvey-mac.zip", "\(hash) Clipvey-mac.zip\n", "\(hash.uppercased())  Clipvey-mac.zip\n", "\(hash.dropLast())  a\n",
+                "\(hash)  a\n\(hash)  a\n", "\(hash)  \n"] {
+        check("SHA256SUMS отвергается: \(bad.debugDescription.prefix(24))…", (try? ReleaseVerifier.parseChecksums(Data(bad.utf8))) == nil)
+    }
+}
+
 // MARK: - Запуск
 
 if arguments.contains("--generate") {
@@ -360,6 +424,7 @@ guard let url = findVectors(),
 }
 print("Данные: \(url.path)")
 verify(vectors)
+verifyReleaseChecks(vectors)
 print("")
 if failures.isEmpty {
     print("Итог: все \(passed) проверок прошли")
