@@ -94,6 +94,46 @@ build() {
     if [ ! -x "$PBTOOL" ] || [ "$E2E_DIR/pasteboard.swift" -nt "$PBTOOL" ]; then
         swiftc -O "$E2E_DIR/pasteboard.swift" -o "$PBTOOL" || fail "swiftc pasteboard.swift"
     fi
+    preflight_network
+}
+
+# Проверка, что проверочный Mac принимает соединения по адресу в локальной сети, а не только
+# через 127.0.0.1. Их может придержать сетевой фильтр (Little Snitch и т. п.) или «Локальная сеть»
+# в настройках конфиденциальности: после каждой пересборки у ad-hoc-подписанного бинарника новая
+# подпись, и фильтр спрашивает заново. Без этой проверки сценарии падали бы по таймауту без объяснения.
+preflight_network() {
+    local out="$WORK/preflight.out"
+    "$MAC" --test --data "$WORK/preflight" --name "e2e-preflight-$SUFFIX" --pasteboard "e2e-preflight-$SUFFIX" \
+        > "$out" 2>&1 &
+    local pid=$!
+    PIDS="$PIDS $pid"
+    wait_for "$out" "^READY " 20 || fail "проверочный Mac не запустился"
+    local port
+    port=$(grep -oE "port=[0-9]+" "$out" | head -n 1 | cut -d= -f2)
+    local result
+    result=$(python3 - "$port" <<'PY'
+import base64, json, socket, struct, sys
+port = int(sys.argv[1])
+probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+probe.connect(("224.0.0.251", 5353))       # адрес в той сети, куда уходит mDNS
+host = probe.getsockname()[0]
+probe.close()
+hello = json.dumps({"t": "hello", "v": 1, "id": "00" * 16,
+                    "eph": base64.b64encode(b"\x04" + b"\x01" * 64).decode()}).encode()
+try:
+    connection = socket.create_connection((host, port), timeout=5)
+    connection.sendall(struct.pack(">I", len(hello)) + hello)
+    header = connection.recv(4)
+    print("ok" if len(header) == 4 else f"{host}: соединение закрыто без ответа")
+except OSError as error:
+    print(f"{host}: {error}")
+PY
+)
+    stop "$pid"
+    [ "$result" = "ok" ] || fail "проверочный Mac не отвечает по адресу в локальной сети ($result). \
+Вероятно, соединения нового бинарника $MAC держит сетевой фильтр (Little Snitch) или запрет «Локальная сеть» — \
+разрешите их и повторите."
+    say "ок: проверочный Mac отвечает по адресу в локальной сети"
 }
 
 timeout_scaled() { echo $(( $1 * ${E2E_TIMEOUT:-1} )); }
