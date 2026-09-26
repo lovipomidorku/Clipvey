@@ -10,7 +10,6 @@
     <RootNamespace>Clipvey.Windows</RootNamespace>
     <ApplicationIcon>Clipvey.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

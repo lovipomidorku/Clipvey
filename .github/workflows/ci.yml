@@ -1,0 +1,73 @@
+# Проверка каждого push и pull request: сборка обеих частей и проверки протокола по tests/vectors.json.
+# Сквозные сценарии (tests/e2e) здесь не запускаются: им нужны mDNS и именованный буфер на настоящем Mac.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    name: Mac
+    # macos-26: SDK macOS 26 (в коде есть API macOS 15.4+). Образ фиксирован, а не macos-latest,
+    # чтобы смена образа не сломала сборку неожиданно.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версии инструментов
+        run: |
+          swift --version
+          xcrun --show-sdk-version
+
+      - name: Сборка (swift build)
+        working-directory: mac
+        run: swift build
+
+      - name: Проверки протокола (clipvey-checks)
+        working-directory: mac
+        run: swift run clipvey-checks
+
+      - name: Сборка приложения (build.sh)
+        run: mac/scripts/build.sh
+
+      - name: В бинарнике нет локальных путей
+        run: |
+          if strings -n 8 mac/build/Clipvey.app/Contents/MacOS/Clipvey | grep -F "$GITHUB_WORKSPACE"; then
+            echo "В бинарнике остался путь к исходникам"
+            exit 1
+          fi
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Решения (.sln) нет, поэтому проекты указываются явно.
+      - name: Проверки (dotnet test)
+        run: dotnet test windows/Clipvey.Tests/Clipvey.Tests.csproj -c Release
+
+      - name: Двойник для проверок (dotnet build)
+        run: dotnet build windows/Clipvey.Peer/Clipvey.Peer.csproj -c Release
+
+      - name: Сборка Clipvey.exe (dotnet publish)
+        run: dotnet publish windows/Clipvey.Windows/Clipvey.Windows.csproj -c Release -o dist/windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Clipvey-windows
+          path: dist/windows/Clipvey.exe
+          if-no-files-found: error
+          retention-days: 7

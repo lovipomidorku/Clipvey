@@ -1,3 +1,5 @@
+// Протокол (ClipveyProtocol) виден во всём приложении без отдельного import в каждом файле.
+@_exported import ClipveyProtocol
 import Foundation
 import IOKit.pwr_mgt
 import os

@@ -14,6 +14,7 @@
 //   --send TEXT         после подключения отправить текст всем устройствам
 //   --send-delay N      перед отправкой подождать ещё N секунд (пока поднимутся остальные сеансы)
 //   --seconds N         сколько работать (по умолчанию 60)
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Clipvey.Core;
@@ -69,6 +70,15 @@ switch (command)
 
 await using var node = new ClipveyNode(identity, store, deviceName, port);
 using var finished = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+// kill (SIGTERM) и Ctrl+C завершают штатно: узел закрывается и рассылает mDNS-«прощание».
+// Иначе запись двойника ещё 2 минуты висит в кэше mDNS у других устройств.
+void StopOnSignal(PosixSignalContext context)
+{
+    context.Cancel = true;
+    finished.Cancel();
+}
+using var onTerminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, StopOnSignal);
+using var onInterrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, StopOnSignal);
 
 node.ClipReceived += (text, from) => Emit($"CLIP {from} {JsonSerializer.Serialize(text)}");
 node.PairingSucceeded += peer => Emit($"PAIRED {peer}");

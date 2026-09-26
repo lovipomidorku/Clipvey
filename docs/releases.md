@@ -5,7 +5,7 @@
 ## Версия
 
 - Единственный источник — файл `VERSION` в корне: одна строка вида `0.2.0` (семантическое версионирование, без `v`).
-- `mac/scripts/build.sh` и `windows/Clipvey.Windows/Clipvey.Windows.csproj` читают версию из него.
+- `mac/scripts/build.sh` и `windows/Directory.Build.props` (для всех проектов .NET) читают версию из него.
 - Тег релиза — `v` + версия, например `v0.2.0`.
 
 ## Файлы релиза

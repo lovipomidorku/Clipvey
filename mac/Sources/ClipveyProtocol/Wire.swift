@@ -1,6 +1,6 @@
 import Foundation
 
-enum ClipveyError: LocalizedError, Sendable {
+public enum ClipveyError: LocalizedError, Sendable {
     case protocolViolation(String)
     /// Другое устройство прислало error или pair_abort.
     case rejected(reason: String)
@@ -8,7 +8,7 @@ enum ClipveyError: LocalizedError, Sendable {
     case cancelled
     case connectionFailed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .protocolViolation(let message): message
         case .rejected(let reason): Self.describe(reason)
@@ -18,7 +18,7 @@ enum ClipveyError: LocalizedError, Sendable {
         }
     }
 
-    var isRejection: Bool {
+    public var isRejection: Bool {
         if case .rejected = self { return true }
         return false
     }
@@ -38,15 +38,22 @@ enum ClipveyError: LocalizedError, Sendable {
 }
 
 /// Фрагмент буфера обмена с данными для пересылки между несколькими устройствами.
-struct ClipPayload: Sendable {
-    let id: String
-    let origin: String
-    let hops: Int
-    let text: String
+public struct ClipPayload: Sendable {
+    public let id: String
+    public let origin: String
+    public let hops: Int
+    public let text: String
+
+    public init(id: String, origin: String, hops: Int, text: String) {
+        self.id = id
+        self.origin = origin
+        self.hops = hops
+        self.text = text
+    }
 }
 
 /// Сообщения протокола (docs/protocol.md). Кодируются объектами JSON с полем "t".
-enum WireMessage: Sendable {
+public enum WireMessage: Sendable {
     case pairHello(name: String, key: Data)
     case pairCommit(name: String, key: Data, commit: Data)
     case pairNonce(Data)
@@ -63,7 +70,7 @@ enum WireMessage: Sendable {
     case pong
     case unknown(String)
 
-    var type: String {
+    public var type: String {
         switch self {
         case .pairHello: "pair_hello"
         case .pairCommit: "pair_commit"
@@ -83,7 +90,7 @@ enum WireMessage: Sendable {
         }
     }
 
-    func encode() -> Data {
+    public func encode() -> Data {
         var object: [String: Any] = ["t": type]
         switch self {
         case .pairHello(let name, let key):
@@ -119,7 +126,7 @@ enum WireMessage: Sendable {
         return (try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes])) ?? Data()
     }
 
-    static func decode(_ data: Data) throws -> WireMessage {
+    public static func decode(_ data: Data) throws -> WireMessage {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["t"] as? String else {
             throw ClipveyError.protocolViolation("Неверное сообщение")
@@ -165,7 +172,7 @@ enum WireMessage: Sendable {
     }
 
     /// Бросает .rejected для error и pair_abort, иначе — нарушение протокола.
-    func unexpected(expecting expected: String) -> ClipveyError {
+    public func unexpected(expecting expected: String) -> ClipveyError {
         switch self {
         case .error(let reason), .pairAbort(let reason): .rejected(reason: reason)
         default: .protocolViolation("Ожидалось «\(expected)», получено «\(type)»")

@@ -9,3 +9,6 @@ dist/
 CLAUDE.md
 PLAN.md
 .claude/
+
+# Сквозные проверки: собранный помощник и папки сценариев
+tests/e2e/tmp/

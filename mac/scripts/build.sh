@@ -6,11 +6,17 @@ set -euo pipefail
 
 APP_NAME="Clipvey"
 BUNDLE_ID="io.github.lovipomidorku.clipvey"   # не меняйте: к нему привязаны настройки и разрешения macOS
-VERSION="0.1.0"
 EXECUTABLE="Clipvey"
 
 ROOT="${0:A:h:h}"
 cd "$ROOT"
+
+# Версия — из файла VERSION в корне репозитория (docs/releases.md).
+VERSION="$(tr -d '[:space:]' < "$ROOT/../VERSION")"
+if [[ ! "$VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+$' ]]; then
+    echo "В VERSION ожидается версия вида 1.2.3, а там «$VERSION»" >&2
+    exit 1
+fi
 
 # Пути к исходникам заменяются на «.», чтобы в бинарник не попали локальные папки.
 SWIFT_FLAGS=(-c release -Xswiftc -file-prefix-map -Xswiftc "$ROOT=.")
