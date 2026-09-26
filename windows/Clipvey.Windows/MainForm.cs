@@ -3,8 +3,9 @@ using static Clipvey.Windows.Localization;
 
 namespace Clipvey.Windows;
 
-/// Окно Clipvey: связанные устройства (с выключателями) и связывание новых — в обеих ролях.
-/// Закрытие окна только прячет его: программа продолжает работать в трее.
+/// Панель Clipvey у значка в трее: связанные устройства (с выключателями) и связывание новых — в обеих ролях.
+/// Без рамки, не видна в панели задач, прячется при потере фокуса (кроме как во время связывания).
+/// Закрытие только прячет панель: программа продолжает работать в трее.
 internal sealed class MainForm : Form
 {
     private const int ContentWidth = 440;
@@ -35,15 +36,27 @@ internal sealed class MainForm : Form
     private bool _codeAccepted;
     private CancellationTokenSource? _outgoingCancel;
 
+    /// Устройство, для которого показан вопрос «Разорвать связь?». Вопрос встроен в панель:
+    /// MessageBox забрал бы фокус, и панель спряталась бы.
+    private string? _confirmUnpair;
+
+    /// Скругление углов через DWM сработало (Windows 11). Иначе рамку рисуем сами.
+    private bool _roundedByDwm;
+
+    /// Когда панель спряталась из-за потери фокуса (Environment.TickCount64).
+    public long HiddenAt { get; private set; }
+
     public MainForm(ClipveyNode node)
     {
         _node = node;
         Text = "Clipvey";
         Icon = AppIcon.Load(new Size(32, 32));
         Font = SystemFonts.MessageBoxFont;
-        FormBorderStyle = FormBorderStyle.FixedSingle;
-        MaximizeBox = false;
-        StartPosition = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        KeyPreview = true;
+        StartPosition = FormStartPosition.Manual;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Padding = new Padding(16);
@@ -64,6 +77,89 @@ internal sealed class MainForm : Form
     }
 
     public void ShowResult(string text) => _result.Text = text;
+
+    /// Связывание идёт — панель не прячется при потере фокуса, чтобы код оставался на экране.
+    private bool IsPairingActive => _node.IncomingPairing is not null || _outgoingPeer is not null;
+
+    /// Показать панель у области уведомлений и отдать ей фокус.
+    public void ShowPanel()
+    {
+        RefreshContent();
+        PerformLayout();
+        Location = PanelPlacement.Locate(Size, DeviceDpi);
+        Show();
+        Activate();
+        try
+        {
+            SetForegroundWindow(Handle);
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
+        {
+        }
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            const int WsExToolWindow = 0x00000080;
+            const int CsDropShadow = 0x00020000;
+            var parameters = base.CreateParams;
+            parameters.ExStyle |= WsExToolWindow;
+            parameters.ClassStyle |= CsDropShadow;
+            return parameters;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        _roundedByDwm = Dwm.TryRoundCorners(Handle);
+        Log.Write(_roundedByDwm ? "Панель: углы скруглены (DWM)" : "Панель: DWM не скругляет углы, рисуется рамка");
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        if (!_roundedByDwm)
+            ControlPaint.DrawBorder(e.Graphics, ClientRectangle, SystemColors.ActiveBorder, ButtonBorderStyle.Solid);
+    }
+
+    protected override void OnDeactivate(EventArgs e)
+    {
+        base.OnDeactivate(e);
+        if (Visible && !IsPairingActive)
+        {
+            HiddenAt = Environment.TickCount64;
+            Hide();
+        }
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.KeyCode == Keys.Escape)
+        {
+            Hide();
+            e.Handled = true;
+        }
+    }
+
+    /// Панель растёт и сжимается вместе с содержимым: угол у панели задач должен оставаться на месте.
+    protected override void OnSizeChanged(EventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (Visible)
+            Location = PanelPlacement.Locate(Size, DeviceDpi);
+        Invalidate();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        if (Visible)
+            Location = PanelPlacement.Locate(Size, DeviceDpi);
+    }
 
     public void RefreshContent()
     {
@@ -107,7 +203,29 @@ internal sealed class MainForm : Form
             return;
         }
         foreach (var device in devices)
+        {
             _devices.Controls.Add(DeviceRow(device));
+            if (_confirmUnpair == device.DeviceId)
+                _devices.Controls.Add(UnpairQuestion(device));
+        }
+    }
+
+    private Control UnpairQuestion(DeviceStatus device)
+    {
+        var question = NewLabel(L($"Разорвать связь с «{device.Name}»?", $"Unpair “{device.Name}”?"));
+        question.Anchor = AnchorStyles.Left;
+        return NewRow(
+            question,
+            NewButton(L("Разорвать", "Unpair"), () =>
+            {
+                _confirmUnpair = null;
+                _node.Unpair(device.DeviceId);
+            }),
+            NewButton(L("Отмена", "Cancel"), () =>
+            {
+                _confirmUnpair = null;
+                RefreshContent();
+            }));
     }
 
     private Control DeviceRow(DeviceStatus device)
@@ -135,10 +253,8 @@ internal sealed class MainForm : Form
         toggle.CheckedChanged += (_, _) => _node.SetEnabled(device.DeviceId, toggle.Checked);
         var unpair = NewButton(L("Разорвать связь", "Unpair"), () =>
         {
-            var answer = MessageBox.Show(this, L($"Разорвать связь с «{device.Name}»?", $"Unpair “{device.Name}”?"), "Clipvey",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (answer == DialogResult.Yes)
-                _node.Unpair(device.DeviceId);
+            _confirmUnpair = device.DeviceId;
+            RefreshContent();
         });
 
         row.Controls.Add(indicator, 0, 0);
@@ -288,6 +404,9 @@ internal sealed class MainForm : Form
         else
             action();
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
 
     // MARK: - Элементы
 

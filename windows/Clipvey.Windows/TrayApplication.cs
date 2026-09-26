@@ -35,7 +35,7 @@ internal sealed class TrayApplication : ApplicationContext
         _tray.MouseClick += (_, e) =>
         {
             if (e.Button == MouseButtons.Left)
-                ShowForm();
+                TogglePanel();
         };
         Localization.Changed += OnLanguageChanged;
 
@@ -161,10 +161,25 @@ internal sealed class TrayApplication : ApplicationContext
     {
         if (_form is null || _form.IsDisposed)
             _form = new MainForm(_node);
-        _form.RefreshContent();
-        _form.Show();
-        _form.WindowState = FormWindowState.Normal;
-        _form.Activate();
+        _form.ShowPanel();
+    }
+
+    /// Левый клик по значку: открыть панель или закрыть открытую.
+    /// Нажатие на значок само снимает фокус с панели, и она прячется раньше, чем придёт клик, —
+    /// поэтому клик сразу после такого скрытия считается закрытием, а не новым открытием.
+    private void TogglePanel()
+    {
+        if (_form is { IsDisposed: false } form)
+        {
+            if (form.Visible)
+            {
+                form.Hide();
+                return;
+            }
+            if (Environment.TickCount64 - form.HiddenAt < 500)
+                return;
+        }
+        ShowForm();
     }
 
     private void Quit()
