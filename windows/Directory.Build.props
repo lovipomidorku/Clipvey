@@ -8,6 +8,10 @@
     <!-- Воспроизводимая сборка: в сборки не попадают локальные пути к исходникам. -->
     <Deterministic>true</Deterministic>
     <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=/_/</PathMap>
+    <!-- Версия — из файла VERSION в корне репозитория (docs/releases.md). -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../VERSION').Trim())</Version>
+    <!-- Без «+<хеш коммита>» в InformationalVersion: обновление сравнивает версии как числа. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <!-- Без отладочных символов: иначе в exe остаётся путь к .pdb. -->
