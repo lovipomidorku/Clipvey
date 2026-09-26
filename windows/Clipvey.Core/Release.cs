@@ -134,7 +134,8 @@ public static class ReleaseVerifier
             // Формат подписи по умолчанию — IEEE P1363, то есть r‖s.
             valid = ecdsa.VerifyData(sums, signature, HashAlgorithmName.SHA256);
         }
-        catch (CryptographicException)
+        // Windows (CNG) на ключ не на кривой бросает PlatformNotSupportedException.
+        catch (Exception e) when (e is CryptographicException or PlatformNotSupportedException)
         {
             valid = false;
         }

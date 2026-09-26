@@ -34,7 +34,8 @@ public static class P256
                 Q = new ECPoint { X = encoded[1..33], Y = encoded[33..65] },
             });
         }
-        catch (CryptographicException)
+        // Windows (CNG) на точку не на кривой бросает PlatformNotSupportedException, а не CryptographicException.
+        catch (Exception e) when (e is CryptographicException or PlatformNotSupportedException)
         {
             throw new ProtocolException("Публичный ключ не лежит на кривой P-256");
         }
