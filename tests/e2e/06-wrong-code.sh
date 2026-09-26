@@ -38,9 +38,11 @@ say "ок: Mac ничего не сохранил"
 # Часть 2: Mac — I и вводит неверный код.
 MAC2_NAME="e2e-mac2-$SUFFIX"
 PEER2_NAME="e2e-peer2-$SUFFIX"
-start_peer peer2 "$PEER2_NAME" "$(free_port)" --pair --auto-confirm
+PEER2_PORT="$(free_port)"
+start_peer peer2 "$PEER2_NAME" "$PEER2_PORT" --pair --auto-confirm
 expect "$WORK/peer2.out" "^READY " 20 "двойник запущен"
-start_mac mac2 "$MAC2_NAME" "e2e-pb2-$SUFFIX" --pair-with "$PEER2_NAME" --code-file "$WORK/wrong-2.txt"
+start_mac mac2 "$MAC2_NAME" "e2e-pb2-$SUFFIX" --pair-with "$PEER2_NAME" --code-file "$WORK/wrong-2.txt" \
+    --pair-address "127.0.0.1:$PEER2_PORT"
 expect "$WORK/peer2.out" "^PAIRING_CODE [0-9]{6} FROM $MAC2_NAME" 30 "двойник показал код"
 wrong_code "$WORK/peer2.out" > "$WORK/wrong-2.txt"
 expect "$WORK/mac2.out" "^PAIRING_FAILED" 15 "Mac: код не совпал"

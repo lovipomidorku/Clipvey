@@ -405,7 +405,9 @@ pair_mac_initiator() {
     start_peer "$peer_tag" "$peer_name" "$peer_port" --pair --auto-confirm
     local peer_pid=$LAST_PID
     expect "$WORK/$peer_tag.out" "^READY " 20 "двойник запущен"
-    start_mac "$mac_tag" "$mac_name" "e2e-pb-$SUFFIX-$mac_tag" --pair-with "$peer_name" --code-file "$WORK/$peer_tag.out"
+    # Mac подключается к двойнику по 127.0.0.1, не дожидаясь Bonjour (см. pair_mac_responder).
+    start_mac "$mac_tag" "$mac_name" "e2e-pb-$SUFFIX-$mac_tag" --pair-with "$peer_name" --code-file "$WORK/$peer_tag.out" \
+        --pair-address "127.0.0.1:$peer_port"
     local mac_pid=$LAST_PID
     expect "$WORK/$mac_tag.out" "^PAIRING_WITH $peer_name" 30 "Mac нашёл двойника"
     expect "$WORK/$peer_tag.out" "^PAIRING_CODE [0-9]{6} FROM $mac_name" 30 "двойник показал код"

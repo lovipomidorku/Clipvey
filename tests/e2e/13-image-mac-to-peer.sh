@@ -1,6 +1,6 @@
 #!/bin/bash
 # Сценарий 13. Картинки Mac → двойник через именованный буфер:
-#   PNG и JPEG уходят как есть (тот же sha256), TIFF — переводится в PNG;
+#   PNG и JPEG уходят как есть (тот же sha256), TIFF переводится в PNG, HEIC — в JPEG;
 #   картинка со ссылкой рядом (так копирует браузер) уходит картинкой;
 #   картинка рядом с обычным текстом (так копируют офисные программы) — уходит текстом.
 source "$(dirname "$0")/lib.sh"
@@ -17,6 +17,8 @@ make_png "$PNG" 700000 1
 make_png "$WORK/source.png" 300000 2
 sips -s format jpeg "$WORK/source.png" --out "$JPEG" > /dev/null || fail "sips jpeg"
 sips -s format tiff "$WORK/source.png" --out "$TIFF" > /dev/null || fail "sips tiff"
+HEIC="$WORK/image.heic"
+sips -s format heic "$WORK/source.png" --out "$HEIC" > /dev/null || fail "sips heic"
 
 pair_mac_responder mac "$MAC_NAME" peer "$PEER_NAME" "$PEER_PORT"
 
@@ -40,6 +42,12 @@ converted=$(grep -E "^IMAGE $MAC_NAME " "$WORK/peer.out" | tail -n 1 | cut -d' '
 [ "$(head -c 8 "$WORK/saved/$converted.png" | xxd -p)" = "89504e470d0a1a0a" ] || fail "TIFF не переведён в PNG"
 say "ок: TIFF переведён в PNG"
 
+pb write-image "$BOARD" "$HEIC"
+expect_count "$WORK/peer.out" "^IMAGE $MAC_NAME " 4 20 "HEIC дошёл"
+converted=$(grep -E "^IMAGE $MAC_NAME " "$WORK/peer.out" | tail -n 1 | cut -d' ' -f4)
+[ "$(head -c 3 "$WORK/saved/$converted.jpg" 2>/dev/null | xxd -p)" = "ffd8ff" ] || fail "HEIC не переведён в JPEG"
+say "ок: HEIC переведён в JPEG"
+
 make_png "$WORK/with-url.png" 200000 3
 pb write-image "$BOARD" "$WORK/with-url.png" "https://example.com/picture.png"
 expect_image "$WORK/peer.out" "$MAC_NAME" "$WORK/with-url.png" 20 "картинка со ссылкой ушла картинкой"
@@ -48,6 +56,6 @@ expect_absent "$WORK/peer.out" "^CLIP .*example.com/picture.png" "ссылка �
 make_png "$WORK/with-text.png" 200000 4
 pb write-image "$BOARD" "$WORK/with-text.png" "ячейка с текстом $SUFFIX"
 expect_clip peer "$WORK/peer.out" "$MAC_NAME" "ячейка с текстом $SUFFIX" 15 "картинка рядом с текстом ушла текстом"
-expect_count "$WORK/peer.out" "^IMAGE $MAC_NAME " 4 1 "картинка рядом с текстом не отправлена"
+expect_count "$WORK/peer.out" "^IMAGE $MAC_NAME " 5 1 "картинка рядом с текстом не отправлена"
 
 pass

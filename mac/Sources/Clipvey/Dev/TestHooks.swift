@@ -1,4 +1,5 @@
 import AppKit
+import Network
 
 /// Самопроверка вместе с консольным clipvey-peer. Включается флагами, в обычной работе выключена.
 ///   --test                 печатать события в stdout («READY …», «CONNECTED …», «CLIP …»)
@@ -8,6 +9,7 @@ import AppKit
 ///   --pair                 открыть режим связывания
 ///   --auto-confirm         в роли R нажать «Готово», когда другая сторона подтвердит код
 ///   --pair-with TEXT       в роли I связаться с устройством, в имени которого есть TEXT
+///   --pair-address H:P     для --pair-with: подключиться по адресу, не дожидаясь Bonjour
 ///   --code-file FILE       взять код для роли I из файла со строкой «PAIRING_CODE 123456»
 ///   --send TEXT            после подключения отправить текст (--send-delay N — подождать ещё N с)
 ///   --exit-after N         выйти через N секунд
@@ -25,6 +27,7 @@ enum TestHooks {
     static private(set) var deviceName: String?
     private static var startPairing = false
     private static var pairWith: String?
+    private static var pairAddress: String?
     private static var codeFile: String?
     private static var sendText: String?
     private static var sendDelay: Double = 0
@@ -43,6 +46,7 @@ enum TestHooks {
         pasteboardName = value("--pasteboard")
         deviceName = value("--name")
         pairWith = value("--pair-with")
+        pairAddress = value("--pair-address")
         codeFile = value("--code-file")
         sendText = value("--send")
         sendDelay = value("--send-delay").flatMap(Double.init) ?? 0
@@ -71,7 +75,13 @@ enum TestHooks {
         if startPairing || pairWith != nil {
             node.startPairingMode()
         }
-        if let pairWith {
+        if let pairWith, let address = pairAddress,
+           let colon = address.lastIndex(of: ":"), let port = NWEndpoint.Port(String(address[address.index(after: colon)...])) {
+            // Без поиска Bonjour: сразу по адресу (как --pair-address у clipvey-peer).
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(String(address[..<colon])), port: port)
+            emit("PAIRING_WITH \(pairWith)")
+            node.pair(with: ClipveyNode.Candidate(id: "", name: pairWith, type: .unknown, endpoint: endpoint))
+        } else if let pairWith {
             Task {
                 for _ in 0..<600 {
                     if let candidate = node.candidates.first(where: { $0.name.localizedCaseInsensitiveContains(pairWith) }) {
