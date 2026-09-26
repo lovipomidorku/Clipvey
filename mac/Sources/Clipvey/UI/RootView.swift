@@ -75,6 +75,7 @@ struct MainView: View {
     var body: some View {
         if let node = model.node {
             VStack(alignment: .leading, spacing: 12) {
+                UpdateBanner()
                 DevicesSection(node: node)
                 if let lastSync = model.lastSyncText {
                     Label {
@@ -391,6 +392,9 @@ struct SettingsView: View {
                 LanguagePicker()
             }
             .cardStyle()
+
+            UpdateSettingsSection()
+                .cardStyle()
 
             if let node = model.node {
                 VStack(alignment: .leading, spacing: 4) {

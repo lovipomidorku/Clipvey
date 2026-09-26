@@ -21,18 +21,25 @@ enum MenuBarIcon {
     /// Как у системных значков строки меню.
     nonisolated private static let pointSize: CGFloat = 14
 
-    private static var cache: [SyncState: NSImage] = [:]
+    private struct Key: Hashable {
+        let state: SyncState
+        let badge: Bool
+    }
 
-    static func image(for state: SyncState) -> NSImage {
-        if let cached = cache[state] {
+    private static var cache: [Key: NSImage] = [:]
+
+    /// badge — точка в правом верхнем углу: доступно обновление.
+    static func image(for state: SyncState, badge: Bool = false) -> NSImage {
+        let key = Key(state: state, badge: badge)
+        if let cached = cache[key] {
             return cached
         }
-        let image = draw(state)
-        cache[state] = image
+        let image = draw(state, badge: badge)
+        cache[key] = image
         return image
     }
 
-    private static func draw(_ state: SyncState) -> NSImage {
+    private static func draw(_ state: SyncState, badge: Bool) -> NSImage {
         let canvas = symbol(outline)?.size ?? NSSize(width: 18, height: 18)
         let name = state == .connected ? filled : outline
         let slashed = state == .disabled
@@ -43,6 +50,9 @@ enum MenuBarIcon {
             symbol.draw(in: NSRect(origin: origin, size: symbol.size))
             if slashed {
                 MenuBarIcon.drawSlash(in: rect)
+            }
+            if badge {
+                MenuBarIcon.drawBadge(in: rect)
             }
             return true
         }
@@ -73,6 +83,20 @@ enum MenuBarIcon {
         path.stroke()
     }
 
+    /// Точка «есть обновление»: вокруг неё вырезается кольцо, чтобы она не сливалась с контуром.
+    nonisolated private static func drawBadge(in rect: NSRect) {
+        let diameter: CGFloat = 6
+        let dot = NSRect(x: rect.maxX - diameter, y: rect.maxY - diameter, width: diameter, height: diameter)
+        guard let context = NSGraphicsContext.current else { return }
+        context.saveGraphicsState()
+        context.compositingOperation = .destinationOut
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+        context.restoreGraphicsState()
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: dot).fill()
+    }
+
     nonisolated private static func symbol(_ name: String) -> NSImage? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular))
@@ -84,7 +108,7 @@ struct MenuBarLabel: View {
     let model: AppModel
 
     var body: some View {
-        Image(nsImage: MenuBarIcon.image(for: model.syncState))
+        Image(nsImage: MenuBarIcon.image(for: model.syncState, badge: Updater.shared.showsBanner))
             .accessibilityLabel(model.statusSummary)
     }
 }
