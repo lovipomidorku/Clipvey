@@ -6,29 +6,43 @@ import Observation
 /// Узел Clipvey:
 /// - слушает TCP и объявляет себя через Bonjour, ищет другие устройства;
 /// - держит с каждым связанным включённым устройством не больше одного сеанса;
-/// - пересылает фрагменты буфера между устройствами;
+/// - пересылает фрагменты буфера (текст и картинки) между устройствами;
 /// - ведёт связывание в обеих ролях.
 /// Правила — docs/protocol.md; логика совпадает с Clipvey.Core на C#.
+/// Интерфейсу узел отдаёт коды (FailureReason, PairingResult), а не готовые строки.
 @MainActor
 @Observable
 final class ClipveyNode {
     struct DeviceStatus: Identifiable, Equatable {
         let id: String
+        /// Имя, которое устройство сообщает о себе.
         let name: String
+        /// Локальный псевдоним (setAlias); nil — нет.
+        let alias: String?
+        /// os и form, если устройство их сообщало.
+        let type: DeviceType
         let enabled: Bool
         let connected: Bool
-        let problem: String?
+        /// Есть сеанс, и в его caps есть image: картинки этому устройству отправляются.
+        let acceptsImages: Bool
+        /// Почему не удаётся подключиться (если известно). Текст подбирает интерфейс.
+        let problem: FailureReason?
+
+        /// Что показывать: псевдоним или имя.
+        var displayName: String { alias ?? name }
     }
 
     struct Candidate: Identifiable, Equatable {
         let id: String
         let name: String
+        let type: DeviceType
         let endpoint: NWEndpoint
     }
 
     /// Входящее связывание (роль R): этот Mac показывает код.
     struct IncomingPairing: Equatable {
         let peerName: String
+        let peerType: DeviceType
         var code: String?
         var verified = false
     }
@@ -40,11 +54,19 @@ final class ClipveyNode {
         case waitingConfirmation(String)
     }
 
+    /// Итог последнего связывания.
+    enum PairingResult: Equatable {
+        case paired(name: String)
+        case failed(FailureReason)
+    }
+
     static let serviceType = "_clipvey._tcp"
     static let defaultPort: UInt16 = 48620
-    private static let maxClipBytes = 1024 * 1024
-    private static let maxHops = 8
-    private static let seenClipsCapacity = 500
+    private static let maxClipBytes = ProtocolLimits.maxClipBytes
+    private static let maxHops = ProtocolLimits.maxHops
+    private static let seenClipsCapacity = ProtocolLimits.seenCapacity
+    /// Сколько картинок может ждать отправки в одном сеансе; при переполнении отбрасывается самая старая.
+    private static let maxQueuedImages = 3
     private static let pairingDuration: TimeInterval = 120
     private static let secondaryConnectDelay: TimeInterval = 5
     private static let rejectedRetryDelay: TimeInterval = 30
@@ -55,14 +77,21 @@ final class ClipveyNode {
     private(set) var incoming: IncomingPairing?
     private(set) var outgoing: OutgoingPairing?
     /// Итог последнего связывания: успех или причина неудачи.
-    private(set) var pairingResult: String?
+    private(set) var pairingResult: PairingResult?
     private(set) var port: UInt16?
 
     let identity: DeviceIdentity
-    let name: String
+    /// Своё имя: TXT, имя экземпляра Bonjour, pair_*, ready и info. Меняется через setName.
+    private(set) var name: String
+    /// Свои os и form (задаёт приложение).
+    let deviceType: DeviceType
+    /// «Передавать картинки»: заявлять image в caps, принимать и отправлять картинки. Меняется через setImagesEnabled.
+    private(set) var imagesEnabled: Bool
 
     /// Пришёл текст с другого устройства (переводы строк — \n) и имя устройства, от которого он пришёл.
     @ObservationIgnored var onClipReceived: ((_ text: String, _ from: String) -> Void)?
+    /// Пришла картинка (image/png или image/jpeg, sha256 проверен) и имя устройства, от которого она пришла.
+    @ObservationIgnored var onImageReceived: ((_ data: Data, _ mime: String, _ from: String) -> Void)?
     /// Изменилось число подключённых устройств.
     @ObservationIgnored var onConnectionsChanged: ((Int) -> Void)?
     /// Для самопроверки: события строками вида «CONNECTED имя».
@@ -73,10 +102,10 @@ final class ClipveyNode {
     @ObservationIgnored private var listenerUsesDefaultPort = true
     @ObservationIgnored private var browser: NWBrowser?
     @ObservationIgnored private var sessions: [String: ActiveSession] = [:]
-    @ObservationIgnored private var browseResults: [String: (name: String, endpoint: NWEndpoint, pairing: Bool)] = [:]
+    @ObservationIgnored private var browseResults: [String: BrowseResult] = [:]
     @ObservationIgnored private var disconnectedSince: [String: Date] = [:]
     @ObservationIgnored private var retryAfter: [String: Date] = [:]
-    @ObservationIgnored private var problems: [String: String] = [:]
+    @ObservationIgnored private var problems: [String: FailureReason] = [:]
     @ObservationIgnored private var connecting: Set<String> = []
     @ObservationIgnored private var seenClips: Set<String> = []
     @ObservationIgnored private var seenOrder: [String] = []
@@ -89,9 +118,19 @@ final class ClipveyNode {
     @ObservationIgnored private var outgoingCode: CheckedContinuation<String?, Never>?
     @ObservationIgnored private var maintenance: Task<Void, Never>?
 
-    init(identity: DeviceIdentity, name: String, store: DeviceStore) {
+    private struct BrowseResult {
+        let name: String
+        let endpoint: NWEndpoint
+        let pairing: Bool
+        let type: DeviceType
+    }
+
+    init(identity: DeviceIdentity, name: String, deviceType: DeviceType, imagesEnabled: Bool, store: DeviceStore) {
         self.identity = identity
-        self.name = name
+        let normalized = Self.normalizedName(name)
+        self.name = normalized.isEmpty ? "Mac" : normalized
+        self.deviceType = deviceType
+        self.imagesEnabled = imagesEnabled
         self.store = store
         refreshDevices()
     }
@@ -111,7 +150,17 @@ final class ClipveyNode {
         }
     }
 
-    // MARK: - Устройства
+    /// Имя без пробелов по краям и не длиннее 63 байт UTF-8 (предел метки DNS для имени экземпляра).
+    static func normalizedName(_ raw: String) -> String {
+        var result = ""
+        for character in raw.trimmingCharacters(in: .whitespacesAndNewlines) {
+            guard result.utf8.count + String(character).utf8.count <= 63 else { break }
+            result.append(character)
+        }
+        return result
+    }
+
+    // MARK: - Устройства и настройки
 
     func setEnabled(_ enabled: Bool, deviceID: String) {
         store.setEnabled(enabled, id: deviceID)
@@ -137,13 +186,64 @@ final class ClipveyNode {
         refreshDevices()
     }
 
+    /// Задать локальный псевдоним устройства; пустая строка — сбросить. Другим устройствам не передаётся.
+    func setAlias(_ alias: String, deviceID: String) {
+        let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.setAlias(trimmed.isEmpty ? nil : trimmed, id: deviceID)
+        Log.network.notice("Псевдоним \(deviceID, privacy: .public): «\(trimmed, privacy: .public)»")
+        refreshDevices()
+    }
+
+    /// Сменить своё имя: TXT и имя экземпляра Bonjour, info всем сеансам. Хранит имя приложение.
+    func setName(_ newName: String) {
+        let normalized = Self.normalizedName(newName)
+        guard !normalized.isEmpty, normalized != name else { return }
+        Log.network.notice("Имя устройства: «\(self.name, privacy: .public)» → «\(normalized, privacy: .public)»")
+        name = normalized
+        // Повторное присваивание service обновляет и имя экземпляра, и TXT.
+        listener?.service = advertisedService()
+        sendInfoToAll()
+    }
+
+    /// Включить или выключить «Передавать картинки»: новый caps в info всем сеансам. Хранит настройку приложение.
+    func setImagesEnabled(_ enabled: Bool) {
+        guard enabled != imagesEnabled else { return }
+        imagesEnabled = enabled
+        Log.network.notice("Передача картинок \(enabled ? "включена" : "выключена", privacy: .public)")
+        if !enabled {
+            for session in sessions.values {
+                session.outgoingImages.removeAll()
+                if case .receiving(let assembly) = session.incomingBlob {
+                    session.incomingBlob = .skipping(assembly.header.id)
+                }
+            }
+        }
+        sendInfoToAll()
+        refreshDevices()
+    }
+
+    private var ownInfo: PeerInfo {
+        PeerInfo(name: name, type: deviceType, caps: imagesEnabled ? [ProtocolLimits.imageCapability] : [])
+    }
+
+    private func sendInfoToAll() {
+        let info = ownInfo
+        for session in sessions.values {
+            let link = session.link
+            Task { try? await link.send(.info(info)) }
+        }
+    }
+
     private func refreshDevices() {
         let list = store.devices.map { device in
             DeviceStatus(
                 id: device.deviceID,
                 name: device.name,
+                alias: device.alias,
+                type: device.type,
                 enabled: device.enabled,
                 connected: sessions[device.deviceID] != nil,
+                acceptsImages: sessions[device.deviceID]?.caps.contains(ProtocolLimits.imageCapability) ?? false,
                 problem: problems[device.deviceID])
         }
         if list != devices {
@@ -152,7 +252,11 @@ final class ClipveyNode {
         onConnectionsChanged?(sessions.count)
     }
 
-    // MARK: - Буфер обмена
+    private func displayName(_ session: ActiveSession) -> String {
+        store.device(id: session.peerID)?.alias ?? session.peerName
+    }
+
+    // MARK: - Текст
 
     /// Отправить текст, скопированный на этом Mac, всем подключённым устройствам.
     func broadcast(_ text: String) {
@@ -160,7 +264,7 @@ final class ClipveyNode {
             Log.clipboard.notice("Текст больше 1 МиБ — не отправлен")
             return
         }
-        let id = ClipveyCrypto.randomNonce().prefix(16).map { String(format: "%02x", $0) }.joined()
+        let id = Blob.newID()
         _ = markSeen(id)
         send(ClipPayload(id: id, origin: identity.deviceID, hops: 0, text: text), except: nil)
     }
@@ -172,7 +276,7 @@ final class ClipveyNode {
         }
         Log.clipboard.info("Получено от «\(session.peerName, privacy: .public)»: \(clip.text.count) символов")
         onEvent?("CLIP \(session.peerName) \(clip.text)")
-        onClipReceived?(clip.text, session.peerName)
+        onClipReceived?(clip.text, displayName(session))
         if clip.hops + 1 < Self.maxHops {
             send(ClipPayload(id: clip.id, origin: clip.origin, hops: clip.hops + 1, text: clip.text), except: session.peerID)
         }
@@ -195,7 +299,7 @@ final class ClipveyNode {
         }
     }
 
-    /// true — фрагмент новый; false — уже был (пришёл другим путём).
+    /// true — фрагмент новый; false — уже был (пришёл другим путём). Список общий для текста и картинок.
     private func markSeen(_ id: String) -> Bool {
         guard seenClips.insert(id).inserted else { return false }
         seenOrder.append(id)
@@ -203,6 +307,151 @@ final class ClipveyNode {
             seenClips.remove(seenOrder.removeFirst())
         }
         return true
+    }
+
+    // MARK: - Картинки
+
+    /// Отправить картинку (image/png или image/jpeg) всем подключённым включённым устройствам с image в caps.
+    /// Возвращает, скольким устройствам она поставлена в очередь (0 — никому или картинка не подходит).
+    /// Данные не копируются: все очереди держат одну и ту же Data.
+    @discardableResult
+    func sendImage(_ data: Data, mime: String) -> Int {
+        guard imagesEnabled else {
+            Log.clipboard.info("Передача картинок выключена — картинка не отправлена")
+            return 0
+        }
+        guard ProtocolLimits.imageMimes.contains(mime) else {
+            Log.clipboard.notice("Картинка \(mime, privacy: .public) не отправлена: незнакомый mime")
+            return 0
+        }
+        guard !data.isEmpty, data.count <= ProtocolLimits.maxImageBytes else {
+            Log.clipboard.notice("Картинка \(data.count) байт больше 20 МиБ — не отправлена")
+            return 0
+        }
+        let header = BlobStart(id: Blob.newID(), origin: identity.deviceID, hops: 0, mime: mime, size: data.count, sha256: Blob.sha256(data))
+        _ = markSeen(header.id)
+        let recipients = enqueueImage(OutgoingImage(header: header, data: data), except: nil)
+        Log.clipboard.info("Картинка \(mime, privacy: .public), \(data.count) байт: в очереди для \(recipients) устройств")
+        return recipients
+    }
+
+    private func handleBlobStart(_ start: BlobStart, from session: ActiveSession) {
+        if case .receiving(let previous) = session.incomingBlob {
+            Log.clipboard.notice("Картинка \(previous.header.id, privacy: .public) от «\(session.peerName, privacy: .public)» не закончена — отброшена")
+        }
+        // Пока не решено иное, картинка пропускается до blob_end.
+        session.incomingBlob = .skipping(start.id)
+        if seenClips.contains(start.id) {
+            Log.clipboard.debug("Повтор картинки от «\(session.peerName, privacy: .public)» пропущен")
+            return
+        }
+        guard imagesEnabled else {
+            Log.clipboard.info("Картинка от «\(session.peerName, privacy: .public)» пропущена: передача картинок выключена")
+            return
+        }
+        if let refusal = BlobAssembly.refusal(start) {
+            Log.clipboard.notice("Картинка от «\(session.peerName, privacy: .public)» не принята: \(refusal, privacy: .public)")
+            onEvent?("IMAGE_REFUSED \(session.peerName)")
+            return
+        }
+        session.incomingBlob = .receiving(BlobAssembly(start))
+    }
+
+    private func handleBlobChunk(id: String, seq: Int, data: Data?, from session: ActiveSession) {
+        guard case .receiving(var assembly) = session.incomingBlob else { return }
+        // Сборка должна остаться единственной ссылкой на данные, иначе append скопирует их целиком.
+        session.incomingBlob = .skipping(assembly.header.id)
+        guard assembly.header.id == id else {
+            Log.clipboard.notice("Картинка от «\(session.peerName, privacy: .public)» отброшена: кусок с другим id")
+            return
+        }
+        do {
+            try assembly.append(seq: seq, chunk: data)
+            session.incomingBlob = .receiving(assembly)
+        } catch {
+            Log.clipboard.notice("Картинка от «\(session.peerName, privacy: .public)» отброшена: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func handleBlobEnd(id: String, from session: ActiveSession) {
+        switch session.incomingBlob {
+        case .receiving(let assembly) where assembly.header.id == id:
+            session.incomingBlob = nil
+            do {
+                deliverImage(assembly.header, try assembly.finish(), from: session)
+            } catch {
+                Log.clipboard.notice("Картинка от «\(session.peerName, privacy: .public)» отброшена: \(error.localizedDescription, privacy: .public)")
+            }
+        case .skipping(let skipped) where skipped == id:
+            session.incomingBlob = nil
+        default:
+            Log.clipboard.debug("blob_end без начатой картинки от «\(session.peerName, privacy: .public)»")
+        }
+    }
+
+    private func deliverImage(_ header: BlobStart, _ data: Data, from session: ActiveSession) {
+        guard imagesEnabled else { return }
+        // id заносится в список последних только после успешной сборки.
+        guard markSeen(header.id) else {
+            Log.clipboard.debug("Повтор картинки от «\(session.peerName, privacy: .public)» отброшен")
+            return
+        }
+        Log.clipboard.info("Картинка от «\(session.peerName, privacy: .public)»: \(header.mime, privacy: .public), \(data.count) байт")
+        onEvent?("IMAGE \(session.peerName) \(data.count) \(header.sha256.map { String(format: "%02x", $0) }.joined())")
+        onImageReceived?(data, header.mime, displayName(session))
+        if header.hops + 1 < Self.maxHops {
+            let forwarded = enqueueImage(OutgoingImage(header: header.with(hops: header.hops + 1), data: data), except: session.peerID)
+            if forwarded > 0 {
+                Log.clipboard.info("Картинка пересылается \(forwarded) устройствам")
+            }
+        }
+    }
+
+    /// Поставить картинку в очередь всем подходящим сеансам. В каждом сеансе картинки уходят по одной.
+    private func enqueueImage(_ image: OutgoingImage, except excluded: String?) -> Int {
+        var recipients = 0
+        for session in sessions.values
+        where session.peerID != excluded && session.peerID != image.header.origin
+            && session.caps.contains(ProtocolLimits.imageCapability)
+            && store.device(id: session.peerID)?.enabled == true {
+            if session.outgoingImages.count >= Self.maxQueuedImages {
+                let dropped = session.outgoingImages.removeFirst()
+                Log.clipboard.notice("Очередь картинок для «\(session.peerName, privacy: .public)» полна — \(dropped.header.id, privacy: .public) не отправлена")
+            }
+            session.outgoingImages.append(image)
+            recipients += 1
+            if session.imageSender == nil {
+                session.imageSender = Task { [weak self] in await self?.drainImages(session) }
+            }
+        }
+        return recipients
+    }
+
+    private func drainImages(_ session: ActiveSession) async {
+        while !session.outgoingImages.isEmpty, sessions[session.peerID] === session {
+            let image = session.outgoingImages.removeFirst()
+            do {
+                try await sendBlob(image, over: session.link)
+                Log.clipboard.info("\(image.header.hops == 0 ? "Отправлена" : "Переслана", privacy: .public) картинка «\(session.peerName, privacy: .public)»: \(image.data.count) байт")
+            } catch {
+                Log.clipboard.error("Не удалось отправить картинку «\(session.peerName, privacy: .public)»: \(error.localizedDescription, privacy: .public)")
+                session.outgoingImages.removeAll()
+                session.link.cancel()
+            }
+        }
+        session.imageSender = nil
+    }
+
+    /// blob_start, куски по порядку, blob_end. Каждый кадр — отдельная отправка через PeerLink
+    /// (шифрование и постановка в очередь без await между ними), поэтому между кусками проходят ping, clip и info.
+    private func sendBlob(_ image: OutgoingImage, over link: PeerLink) async throws {
+        try await link.send(.blobStart(image.header))
+        let base = image.data.startIndex
+        for (seq, range) in Blob.chunkRanges(size: image.data.count).enumerated() {
+            let chunk = image.data.subdata(in: base + range.lowerBound ..< base + range.upperBound)
+            try await link.send(.blobChunk(id: image.header.id, seq: seq, data: chunk))
+        }
+        try await link.send(.blobEnd(id: image.header.id))
     }
 
     // MARK: - Объявление и поиск
@@ -251,11 +500,10 @@ final class ClipveyNode {
     }
 
     private func advertisedService() -> NWListener.Service {
-        NWListener.Service(
-            name: name,
-            type: Self.serviceType,
-            domain: nil,
-            txtRecord: NWTXTRecord(["id": identity.deviceID, "v": "1", "pair": isPairingMode ? "1" : "0"]))
+        var txt = ["id": identity.deviceID, "v": "1", "pair": isPairingMode ? "1" : "0"]
+        if let os = deviceType.os { txt["os"] = os }
+        if let form = deviceType.form { txt["form"] = form }
+        return NWListener.Service(name: name, type: Self.serviceType, domain: nil, txtRecord: NWTXTRecord(txt))
     }
 
     private func startBrowser() {
@@ -275,13 +523,17 @@ final class ClipveyNode {
     }
 
     private func browseResultsChanged(_ results: Set<NWBrowser.Result>) {
-        var found: [String: (name: String, endpoint: NWEndpoint, pairing: Bool)] = [:]
+        var found: [String: BrowseResult] = [:]
         for result in results {
             guard case .service(let serviceName, _, _, _) = result.endpoint,
                   case .bonjour(let txt) = result.metadata,
                   let id = txt["id"], id != identity.deviceID,
                   found[id] == nil else { continue }
-            found[id] = (serviceName, result.endpoint, txt["pair"] == "1")
+            found[id] = BrowseResult(
+                name: serviceName,
+                endpoint: result.endpoint,
+                pairing: txt["pair"] == "1",
+                type: DeviceType(os: txt["os"], form: txt["form"]))
         }
         browseResults = found
         updateCandidates()
@@ -292,7 +544,7 @@ final class ClipveyNode {
         let list = isPairingMode
             ? browseResults
                 .filter { $0.value.pairing && store.device(id: $0.key) == nil }
-                .map { Candidate(id: $0.key, name: $0.value.name, endpoint: $0.value.endpoint) }
+                .map { Candidate(id: $0.key, name: $0.value.name, type: $0.value.type, endpoint: $0.value.endpoint) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             : []
         if list != candidates {
@@ -314,8 +566,8 @@ final class ClipveyNode {
             let first = try await link.receive()
             timer.cancel()
             switch first {
-            case .pairHello(let peerName, let peerKey):
-                await respondToPairing(link: link, peerName: peerName, peerKey: peerKey)
+            case .pairHello(let peerName, let peerKey, let peerType):
+                await respondToPairing(link: link, peerName: peerName, peerKey: peerKey, peerType: peerType)
             case .hello(let peerID, let ephemeral):
                 try await respondToSession(link: link, peerID: peerID, peerEphemeral: ephemeral)
             default:
@@ -359,8 +611,8 @@ final class ClipveyNode {
                 initiatorEphemeral: peerEphemeral, responderEphemeral: ephemeralPublic))
         await link.enableEncryption(SecureCodec(sendKey: keys.responderToInitiator, receiveKey: keys.initiatorToResponder))
 
-        let peerName = try await exchangeReady(link, fallbackName: peer.name)
-        adopt(link: link, peer: peer, peerName: peerName, initiatorID: peer.deviceID, endpoint: link.remoteEndpoint, keepPort: true)
+        let info = try await exchangeReady(link)
+        adopt(link: link, peer: peer, info: info, initiatorID: peer.deviceID, endpoint: link.remoteEndpoint, keepPort: true)
     }
 
     // MARK: - Исходящие соединения
@@ -374,21 +626,33 @@ final class ClipveyNode {
             let endpoints = endpoints(for: device)
             guard !endpoints.isEmpty else { continue }
             connecting.insert(device.deviceID)
-            for endpoint in endpoints {
-                do {
-                    try await initiateSession(with: device, via: endpoint)
-                    break
-                } catch let error as ClipveyError where error.isRejection {
-                    Log.network.notice("«\(device.name, privacy: .public)»: \(error.localizedDescription, privacy: .public)")
-                    problems[device.deviceID] = error.localizedDescription
-                    retryAfter[device.deviceID] = Date().addingTimeInterval(Self.rejectedRetryDelay)
+            await connect(to: device, endpoints: endpoints)
+            connecting.remove(device.deviceID)
+        }
+    }
+
+    /// Пробует адреса по очереди. Пауза 30 с — только после disabled. unknown_device или не тот deviceId
+    /// по запасному адресу значат, что там теперь другой Clipvey: пробуется следующий адрес.
+    private func connect(to device: StoredDevice, endpoints: [(endpoint: NWEndpoint, discovered: Bool)]) async {
+        for (endpoint, discovered) in endpoints {
+            do {
+                try await initiateSession(with: device, via: endpoint)
+                return
+            } catch let error as ClipveyError where error.reason == .disabled {
+                Log.network.notice("«\(device.name, privacy: .public)»: \(error.localizedDescription, privacy: .public)")
+                problems[device.deviceID] = .disabled
+                retryAfter[device.deviceID] = Date().addingTimeInterval(Self.rejectedRetryDelay)
+                refreshDevices()
+                return
+            } catch {
+                let reason = ClipveyError.reason(of: error)
+                Log.network.info("Подключение к «\(device.name, privacy: .public)» (\(discovered ? "найден в сети" : "запасной адрес", privacy: .public)): \(error.localizedDescription, privacy: .public)")
+                // Устройство, найденное в сети по своему id, нас не знает — надо связать заново.
+                if discovered, reason == .unknownDevice, problems[device.deviceID] != reason {
+                    problems[device.deviceID] = reason
                     refreshDevices()
-                    break
-                } catch {
-                    Log.network.info("Подключение к «\(device.name, privacy: .public)»: \(error.localizedDescription, privacy: .public)")
                 }
             }
-            connecting.remove(device.deviceID)
         }
     }
 
@@ -407,13 +671,14 @@ final class ClipveyNode {
         return Date().timeIntervalSince(since) >= Self.secondaryConnectDelay
     }
 
-    private func endpoints(for device: StoredDevice) -> [NWEndpoint] {
-        var endpoints: [NWEndpoint] = []
+    /// Сначала адрес из Bonjour, затем запасной (последний удачный).
+    private func endpoints(for device: StoredDevice) -> [(endpoint: NWEndpoint, discovered: Bool)] {
+        var endpoints: [(endpoint: NWEndpoint, discovered: Bool)] = []
         if let found = browseResults[device.deviceID] {
-            endpoints.append(found.endpoint)
+            endpoints.append((found.endpoint, true))
         }
         if let host = device.lastHost, device.lastPort > 0, let port = NWEndpoint.Port(rawValue: UInt16(device.lastPort)) {
-            endpoints.append(.hostPort(host: NWEndpoint.Host(host), port: port))
+            endpoints.append((.hostPort(host: NWEndpoint.Host(host), port: port), false))
         }
         return endpoints
     }
@@ -433,7 +698,7 @@ final class ClipveyNode {
                 throw ack.unexpected(expecting: "hello_ack")
             }
             guard peerID == device.deviceID else {
-                throw ClipveyError.protocolViolation("Ответило не то устройство, с которым было связывание")
+                throw ClipveyError.wrongDevice
             }
 
             let peerStatic = try ClipveyCrypto.publicKey(from: device.publicKey)
@@ -447,8 +712,8 @@ final class ClipveyNode {
                     initiatorEphemeral: ephemeralPublic, responderEphemeral: peerEphemeral))
             await link.enableEncryption(SecureCodec(sendKey: keys.initiatorToResponder, receiveKey: keys.responderToInitiator))
 
-            let peerName = try await exchangeReady(link, fallbackName: device.name)
-            adopt(link: link, peer: device, peerName: peerName, initiatorID: identity.deviceID, endpoint: link.remoteEndpoint, keepPort: false)
+            let info = try await exchangeReady(link)
+            adopt(link: link, peer: device, info: info, initiatorID: identity.deviceID, endpoint: link.remoteEndpoint, keepPort: false)
         } catch {
             link.cancel()
             throw error
@@ -463,17 +728,18 @@ final class ClipveyNode {
 
     // MARK: - Сеансы
 
-    private func exchangeReady(_ link: PeerLink, fallbackName: String) async throws -> String {
-        try await link.send(.ready(name: name))
+    private func exchangeReady(_ link: PeerLink) async throws -> PeerInfo {
+        try await link.send(.ready(ownInfo))
         let message = try await link.receive()
-        guard case .ready(let peerName) = message else {
+        guard case .ready(let info) = message else {
             throw message.unexpected(expecting: "ready")
         }
-        return peerName ?? fallbackName
+        return info
     }
 
-    private func adopt(link: PeerLink, peer: StoredDevice, peerName: String, initiatorID: String, endpoint: (host: String, port: Int)?, keepPort: Bool) {
+    private func adopt(link: PeerLink, peer: StoredDevice, info: PeerInfo, initiatorID: String, endpoint: (host: String, port: Int)?, keepPort: Bool) {
         let peerID = peer.deviceID
+        let peerName = info.name.flatMap { $0.isEmpty ? nil : $0 } ?? peer.name
         if let existing = sessions[peerID] {
             // Два одновременных сеанса: оставляем тот, где подключался меньший deviceId.
             let preferred = identity.deviceID < peerID ? identity.deviceID : peerID
@@ -484,17 +750,48 @@ final class ClipveyNode {
             }
             existing.link.cancel()
         }
-        let session = ActiveSession(link: link, peerID: peerID, peerName: peerName, initiatorID: initiatorID)
+        // В ready отсутствие caps значит «ничего» (так у 0.1.0): картинки такому устройству не шлются.
+        let session = ActiveSession(link: link, peerID: peerID, peerName: peerName, initiatorID: initiatorID, caps: Set(info.caps ?? []))
         sessions[peerID] = session
         disconnectedSince[peerID] = nil
         problems[peerID] = nil
+        store.updateInfo(id: peerID, name: info.name, type: info.type)
         if let endpoint {
-            store.updateEndpoint(id: peerID, name: peerName, host: endpoint.host, port: keepPort ? nil : endpoint.port)
+            store.updateEndpoint(id: peerID, host: endpoint.host, port: keepPort ? nil : endpoint.port)
+        }
+        if peer.name != peerName {
+            Log.network.notice("«\(peer.name, privacy: .public)» теперь называется «\(peerName, privacy: .public)»")
+            onEvent?("RENAMED \(peer.name) \(peerName)")
         }
         let direction = initiatorID == identity.deviceID ? "исходящий" : "входящий"
         Log.network.notice("Сеанс с «\(peerName, privacy: .public)» установлен (\(direction, privacy: .public))")
         onEvent?("CONNECTED \(peerName)")
+        emitInfo(session)
         Task { await runSession(session) }
+        refreshDevices()
+    }
+
+    /// «INFO имя os=… form=… caps=…» для самопроверки: что известно о другом устройстве.
+    private func emitInfo(_ session: ActiveSession) {
+        let type = store.device(id: session.peerID)?.type ?? .unknown
+        let caps = session.caps.sorted().joined(separator: ",")
+        onEvent?("INFO \(session.peerName) os=\(type.os ?? "-") form=\(type.form ?? "-") caps=\(caps.isEmpty ? "-" : caps)")
+    }
+
+    private func handleInfo(_ info: PeerInfo, from session: ActiveSession) {
+        if let newName = info.name, !newName.isEmpty, newName != session.peerName {
+            Log.network.notice("«\(session.peerName, privacy: .public)» теперь называется «\(newName, privacy: .public)»")
+            onEvent?("RENAMED \(session.peerName) \(newName)")
+            session.peerName = newName
+        }
+        if let caps = info.caps {
+            session.caps = Set(caps)
+            if !session.caps.contains(ProtocolLimits.imageCapability) {
+                session.outgoingImages.removeAll()
+            }
+        }
+        store.updateInfo(id: session.peerID, name: info.name, type: info.type)
+        emitInfo(session)
         refreshDevices()
     }
 
@@ -521,6 +818,14 @@ final class ClipveyNode {
                 switch message {
                 case .clip(let clip):
                     handleClip(clip, from: session)
+                case .info(let info):
+                    handleInfo(info, from: session)
+                case .blobStart(let start):
+                    handleBlobStart(start, from: session)
+                case .blobChunk(let id, let seq, let data):
+                    handleBlobChunk(id: id, seq: seq, data: data, from: session)
+                case .blobEnd(let id):
+                    handleBlobEnd(id: id, from: session)
                 case .ping:
                     try await link.send(.pong)
                 case .pong:
@@ -535,6 +840,8 @@ final class ClipveyNode {
             }
         }
         link.cancel()
+        session.outgoingImages.removeAll()
+        session.incomingBlob = nil
         if sessions[session.peerID] === session {
             sessions[session.peerID] = nil
             disconnectedSince[session.peerID] = Date()
@@ -622,7 +929,7 @@ final class ClipveyNode {
         }
     }
 
-    private func respondToPairing(link: PeerLink, peerName: String, peerKey: Data) async {
+    private func respondToPairing(link: PeerLink, peerName: String, peerKey: Data, peerType: DeviceType) async {
         guard isPairingMode else {
             try? await link.send(.error(reason: "not_pairing"))
             link.cancel()
@@ -636,7 +943,7 @@ final class ClipveyNode {
         }
         pairingBusy = true
         incomingLink = link
-        incoming = IncomingPairing(peerName: peerName)
+        incoming = IncomingPairing(peerName: peerName, peerType: peerType)
         let deadline = cancel(link, after: Self.pairingDuration)
         defer {
             deadline.cancel()
@@ -652,7 +959,8 @@ final class ClipveyNode {
             try await link.send(.pairCommit(
                 name: name,
                 key: identity.publicKey,
-                commit: ClipveyCrypto.commitment(responderKey: identity.publicKey, initiatorKey: peerKey, responderNonce: nonce)))
+                commit: ClipveyCrypto.commitment(responderKey: identity.publicKey, initiatorKey: peerKey, responderNonce: nonce),
+                type: deviceType))
             let nonceMessage = try await link.receive()
             guard case .pairNonce(let peerNonce) = nonceMessage else {
                 throw nonceMessage.unexpected(expecting: "pair_nonce")
@@ -681,7 +989,11 @@ final class ClipveyNode {
             }
             try await link.send(.pairDone)
             link.cancel()
-            savePaired(deviceID: ClipveyCrypto.deviceID(for: peerKey), name: peerName, publicKey: peerKey, endpoint: link.remoteEndpoint, port: Int(Self.defaultPort))
+            // Порт слушателя I через Bonjour здесь неизвестен (NWBrowser не отдаёт порт без разрешения имени),
+            // поэтому запасной адрес — с портом по умолчанию. Если там окажется другой Clipvey, узел
+            // просто попробует следующий адрес (см. connect), а при исходящем сеансе запомнит настоящий порт.
+            savePaired(deviceID: ClipveyCrypto.deviceID(for: peerKey), name: peerName, publicKey: peerKey, type: peerType,
+                       endpoint: link.remoteEndpoint, port: Int(Self.defaultPort))
         } catch {
             if case ClipveyError.cancelled = error {
                 try? await link.send(.pairAbort(reason: "cancel"))
@@ -705,9 +1017,9 @@ final class ClipveyNode {
 
         do {
             try await link.start(timeout: 5)
-            try await link.send(.pairHello(name: name, key: identity.publicKey))
+            try await link.send(.pairHello(name: name, key: identity.publicKey, type: deviceType))
             let commitMessage = try await link.receive()
-            guard case .pairCommit(let peerName, let peerKey, let commitment) = commitMessage else {
+            guard case .pairCommit(let peerName, let peerKey, let commitment, let peerType) = commitMessage else {
                 throw commitMessage.unexpected(expecting: "pair_commit")
             }
             _ = try ClipveyCrypto.publicKey(from: peerKey)
@@ -719,7 +1031,7 @@ final class ClipveyNode {
             }
             guard ClipveyCrypto.commitment(responderKey: peerKey, initiatorKey: identity.publicKey, responderNonce: peerNonce) == commitment else {
                 try? await link.send(.pairAbort(reason: "commit"))
-                throw ClipveyError.protocolViolation("Проверка связывания не прошла — возможно, соединение перехвачено")
+                throw ClipveyError.commitMismatch
             }
 
             let code = ClipveyCrypto.code(initiatorKey: identity.publicKey, responderKey: peerKey, initiatorNonce: nonce, responderNonce: peerNonce)
@@ -747,24 +1059,29 @@ final class ClipveyNode {
             }
             let endpoint = link.remoteEndpoint
             link.cancel()
-            savePaired(deviceID: ClipveyCrypto.deviceID(for: peerKey), name: peerName, publicKey: peerKey, endpoint: endpoint, port: endpoint?.port)
+            savePaired(deviceID: ClipveyCrypto.deviceID(for: peerKey), name: peerName, publicKey: peerKey, type: peerType,
+                       endpoint: endpoint, port: endpoint?.port)
         } catch {
             link.cancel()
             pairingFailed(error)
         }
     }
 
-    private func savePaired(deviceID: String, name peerName: String, publicKey: Data, endpoint: (host: String, port: Int)?, port: Int?) {
+    private func savePaired(deviceID: String, name peerName: String, publicKey: Data, type: DeviceType, endpoint: (host: String, port: Int)?, port: Int?) {
         store.upsert(StoredDevice(
             deviceID: deviceID,
             name: peerName,
             publicKey: publicKey,
             lastHost: endpoint?.host,
             lastPort: port ?? Int(Self.defaultPort),
-            enabled: true))
+            enabled: true,
+            os: type.os,
+            form: type.form,
+            // Псевдоним переживает повторное связывание с тем же устройством.
+            alias: store.device(id: deviceID)?.alias))
         disconnectedSince[deviceID] = Date()
         problems[deviceID] = nil
-        pairingResult = "Связано с «\(peerName)»"
+        pairingResult = .paired(name: peerName)
         Log.network.notice("Связывание с «\(peerName, privacy: .public)» завершено")
         onEvent?("PAIRED \(peerName)")
         stopPairingMode(cancelFlows: false)
@@ -773,11 +1090,24 @@ final class ClipveyNode {
     }
 
     private func pairingFailed(_ error: Error) {
+        let reason = ClipveyError.reason(of: error)
+        pairingResult = .failed(reason)
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        pairingResult = message
         Log.network.notice("Связывание не удалось: \(message, privacy: .public)")
-        onEvent?("PAIRING_FAILED \(message)")
+        onEvent?("PAIRING_FAILED \(reason.code)")
     }
+}
+
+/// Картинка в очереди на отправку. Data общая для всех очередей (копии не создаются).
+private struct OutgoingImage {
+    let header: BlobStart
+    let data: Data
+}
+
+/// Что сейчас приходит по сеансу: картинка собирается или пропускается до blob_end.
+private enum IncomingBlob {
+    case receiving(BlobAssembly)
+    case skipping(String)
 }
 
 /// Сеанс с устройством. Живёт на главном потоке вместе с узлом.
@@ -785,14 +1115,20 @@ final class ClipveyNode {
 private final class ActiveSession {
     let link: PeerLink
     let peerID: String
-    let peerName: String
+    var peerName: String
     let initiatorID: String
+    /// Последний известный caps другой стороны (из ready, затем из info).
+    var caps: Set<String>
     var lastReceived = Date()
+    var incomingBlob: IncomingBlob?
+    var outgoingImages: [OutgoingImage] = []
+    var imageSender: Task<Void, Never>?
 
-    init(link: PeerLink, peerID: String, peerName: String, initiatorID: String) {
+    init(link: PeerLink, peerID: String, peerName: String, initiatorID: String, caps: Set<String>) {
         self.link = link
         self.peerID = peerID
         self.peerName = peerName
         self.initiatorID = initiatorID
+        self.caps = caps
     }
 }

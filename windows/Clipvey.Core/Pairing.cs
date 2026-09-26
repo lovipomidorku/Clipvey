@@ -3,14 +3,18 @@ using System.Text.Json.Nodes;
 
 namespace Clipvey.Core;
 
-public sealed record PairedDevice(string DeviceId, string Name, byte[] PublicKey);
+/// Type — os и form, которые устройство сообщило при связывании (или Unknown).
+public sealed record PairedDevice(string DeviceId, string Name, byte[] PublicKey, DeviceType? Type = null);
 
 /// Входящее связывание (сторона R): код, подтверждение другой стороны и решение пользователя.
-public sealed class IncomingPairing(string peerName)
+public sealed class IncomingPairing(string peerName, DeviceType peerType)
 {
     private readonly TaskCompletionSource<bool> _decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public string PeerName { get; } = peerName;
+
+    /// os и form другого устройства из pair_hello (для значка).
+    public DeviceType PeerType { get; } = peerType;
 
     /// Код для показа пользователю (null — ещё не вычислен).
     public string? Code { get; internal set; }
@@ -35,22 +39,26 @@ public static class Pairing
         Stream stream,
         Identity identity,
         string ownName,
+        DeviceType ownType,
         Func<string, CancellationToken, Task<string?>> requestCode,
         Action? codeAccepted,
         CancellationToken ct)
     {
-        await Send(stream, new JsonObject
+        var hello = new JsonObject
         {
             ["t"] = "pair_hello",
             ["v"] = Protocol.Version,
             ["name"] = ownName,
             ["key"] = Convert.ToBase64String(identity.PublicKey),
-        }, ct);
+        };
+        ownType.WriteTo(hello);
+        await Send(stream, hello, ct);
 
         var commitMessage = Messages.Expect(await Receive(stream, ct), "pair_commit");
         var peerName = Messages.String(commitMessage, "name");
         var peerKey = Messages.Bytes(commitMessage, "key", P256.PublicKeyLength);
         var commitment = Messages.Bytes(commitMessage, "commit", 32);
+        var peerType = DeviceType.Parse(commitMessage);
         using (P256.ImportPublicKey(peerKey))
         {
             // Только проверка, что ключ — точка на кривой.
@@ -64,7 +72,7 @@ public static class Pairing
         if (!CryptographicOperations.FixedTimeEquals(PairingMath.Commitment(peerKey, identity.PublicKey, peerNonce), commitment))
         {
             await TrySendAbort(stream, "commit");
-            throw new ProtocolException("Другое устройство нарушило обязательство — возможно, соединение перехвачено");
+            throw new CommitMismatchException();
         }
 
         var code = PairingMath.Code(identity.PublicKey, peerKey, ownNonce, peerNonce);
@@ -85,7 +93,7 @@ public static class Pairing
         codeAccepted?.Invoke();
         Messages.Expect(await Receive(stream, ct), "pair_done");
         Log.Write($"Связывание с «{peerName}» завершено");
-        return new PairedDevice(Identity.DeviceIdFor(peerKey), peerName, peerKey);
+        return new PairedDevice(Identity.DeviceIdFor(peerKey), peerName, peerKey, peerType);
     }
 
     /// Сторона R: показываем код, ждём подтверждения другой стороны и нажатия «Готово».
@@ -94,6 +102,7 @@ public static class Pairing
         JsonObject hello,
         Identity identity,
         string ownName,
+        DeviceType ownType,
         IncomingPairing pairing,
         Action changed,
         CancellationToken cancellationToken)
@@ -116,13 +125,15 @@ public static class Pairing
             }
 
             var ownNonce = RandomNumberGenerator.GetBytes(32);
-            await Send(stream, new JsonObject
+            var commit = new JsonObject
             {
                 ["t"] = "pair_commit",
                 ["name"] = ownName,
                 ["key"] = Convert.ToBase64String(identity.PublicKey),
                 ["commit"] = Convert.ToBase64String(PairingMath.Commitment(identity.PublicKey, peerKey, ownNonce)),
-            }, ct);
+            };
+            ownType.WriteTo(commit);
+            await Send(stream, commit, ct);
 
             var nonceMessage = Messages.Expect(await Receive(stream, ct), "pair_nonce");
             var peerNonce = Messages.Bytes(nonceMessage, "nonce", 32);
@@ -139,7 +150,7 @@ public static class Pairing
                 throw new OperationCanceledException("Связывание отменено");
             await Send(stream, new JsonObject { ["t"] = "pair_done" }, ct);
             Log.Write($"Связывание с «{pairing.PeerName}» завершено");
-            return new PairedDevice(Identity.DeviceIdFor(peerKey), pairing.PeerName, peerKey);
+            return new PairedDevice(Identity.DeviceIdFor(peerKey), pairing.PeerName, peerKey, pairing.PeerType);
         }
         catch (OperationCanceledException)
         {

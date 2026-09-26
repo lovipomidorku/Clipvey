@@ -5,5 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Clipvey.Tests" />
+    <!-- Флаг двойника ignore-image-limit: проверка отказа у получателя картинки больше 20 МиБ. -->
+    <InternalsVisibleTo Include="clipvey-peer" />
   </ItemGroup>
 </Project>

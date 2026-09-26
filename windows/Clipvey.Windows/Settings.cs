@@ -36,6 +36,30 @@ internal static class AppSettings
         });
     }
 
+    /// Своё имя устройства, заданное пользователем; null — имя компьютера.
+    public static string? DeviceName
+    {
+        get => Read("deviceName") is { Length: > 0 } name ? name : null;
+        set => Write("deviceName", value);
+    }
+
+    /// «Передавать картинки» (по умолчанию включено).
+    public static bool ImagesEnabled
+    {
+        get
+        {
+            try
+            {
+                return Data["imagesEnabled"]?.GetValue<bool>() ?? true;
+            }
+            catch (Exception e) when (e is InvalidOperationException or FormatException)
+            {
+                return true;
+            }
+        }
+        set => Write("imagesEnabled", JsonValue.Create(value));
+    }
+
     private static string? Read(string key)
     {
         try
@@ -48,7 +72,9 @@ internal static class AppSettings
         }
     }
 
-    private static void Write(string key, string value)
+    private static void Write(string key, string? value) => Write(key, value is null ? null : JsonValue.Create(value));
+
+    private static void Write(string key, JsonNode? value)
     {
         Data[key] = value;
         try

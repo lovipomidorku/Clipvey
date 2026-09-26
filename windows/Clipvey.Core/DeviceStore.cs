@@ -4,9 +4,22 @@ namespace Clipvey.Core;
 
 /// Связанное устройство и последний адрес, по которому с ним удалось соединиться.
 /// Enabled = false — связь сохранена, но синхронизация с устройством выключена.
-public sealed record StoredDevice(string DeviceId, string Name, string PublicKey, string? LastHost, int LastPort, bool Enabled = true)
+/// Os, Form и Alias появились после 0.1.0: в старых файлах их нет, тогда они null.
+/// Name — имя, которое устройство сообщает о себе; Alias — локальный псевдоним, заданный пользователем.
+public sealed record StoredDevice(
+    string DeviceId,
+    string Name,
+    string PublicKey,
+    string? LastHost,
+    int LastPort,
+    bool Enabled = true,
+    string? Os = null,
+    string? Form = null,
+    string? Alias = null)
 {
-    public PairedDevice ToPaired() => new(DeviceId, Name, Convert.FromBase64String(PublicKey));
+    public DeviceType Type => new(Os, Form);
+
+    public PairedDevice ToPaired() => new(DeviceId, Name, Convert.FromBase64String(PublicKey), Type);
 }
 
 /// Список связанных устройств в devices.json.
@@ -57,7 +70,23 @@ public sealed class DeviceStore(string directory)
     }
 
     /// port = null — оставить прежний (у входящего соединения порт слушателя другой стороны неизвестен).
-    public void UpdateEndpoint(string deviceId, string name, string host, int? port)
+    public void UpdateEndpoint(string deviceId, string host, int? port) =>
+        Update(deviceId, current => current with { LastHost = host, LastPort = port ?? current.LastPort });
+
+    /// Имя и тип из ready или info. null — поле не пришло, оставить прежнее.
+    public void UpdateInfo(string deviceId, string? name, DeviceType type) =>
+        Update(deviceId, current => current with
+        {
+            Name = string.IsNullOrEmpty(name) ? current.Name : name,
+            Os = type.Os ?? current.Os,
+            Form = type.Form ?? current.Form,
+        });
+
+    /// alias = null — сбросить псевдоним.
+    public void SetAlias(string deviceId, string? alias) =>
+        Update(deviceId, current => current with { Alias = alias });
+
+    private void Update(string deviceId, Func<StoredDevice, StoredDevice> change)
     {
         lock (_lock)
         {
@@ -65,9 +94,8 @@ public sealed class DeviceStore(string directory)
             var index = devices.FindIndex(existing => existing.DeviceId == deviceId);
             if (index < 0)
                 return;
-            var current = devices[index];
-            var updated = current with { Name = name, LastHost = host, LastPort = port ?? current.LastPort };
-            if (updated == current)
+            var updated = change(devices[index]);
+            if (updated == devices[index])
                 return;
             devices[index] = updated;
             SaveUnlocked(devices);

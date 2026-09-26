@@ -194,7 +194,7 @@ private struct DeviceRow: View {
     private var statusText: String {
         if !device.enabled { return L("Синхронизация выключена", "Sync is off") }
         if device.connected { return L("Подключено", "Connected") }
-        return device.problem ?? L("Не в сети", "Offline")
+        return device.problem?.text ?? L("Не в сети", "Offline")
     }
 }
 
@@ -217,7 +217,7 @@ private struct PairingSection: View {
                 }
             }
             if let result = node.pairingResult {
-                Text(result)
+                Text(result.text)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

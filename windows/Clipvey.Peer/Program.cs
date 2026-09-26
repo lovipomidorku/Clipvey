@@ -8,13 +8,24 @@
 //   --port N            желаемый TCP-порт (по умолчанию 48620)
 //   --pair              открыть режим связывания
 //   --pair-with TEXT    связаться (роль I) с устройством в режиме связывания, в имени которого есть TEXT
+//   --pair-address HOST:PORT  для --pair-with: подключиться по адресу, не дожидаясь mDNS (проверки без mDNS)
 //   --code CODE         код для роли I
 //   --code-file FILE    взять код для роли I из файла со строкой «PAIRING_CODE 123456»
 //   --auto-confirm      в роли R нажать «Готово», когда другая сторона подтвердит код
 //   --send TEXT         после подключения отправить текст всем устройствам
 //   --send-delay N      перед отправкой подождать ещё N секунд (пока поднимутся остальные сеансы)
 //   --seconds N         сколько работать (по умолчанию 60)
+//   --os OS, --form F   свой тип устройства (по умолчанию windows / desktop)
+//   --images off        выключить «Передавать картинки»
+//   --send-image FILE   после подключения (и --send-delay) отправить картинку; mime по расширению: .png, .jpg/.jpeg
+//   --ignore-image-limit  отправить картинку и больше 20 МиБ (проверка отказа у получателя)
+//   --save-images DIR   сохранять полученные картинки в DIR (имя — sha256 и расширение)
+//   --rename-after N NAME  через N секунд после запуска сменить своё имя
+// События: READY, PAIRING_CODE, PAIRED, PAIRING_FAILED <код>, CONNECTED, DISCONNECTED, CLIP, SENT,
+//   IMAGE <от кого> <размер> <sha256 hex>, IMAGE_SENT <получателей>, INFO <имя> os=… form=… caps=…,
+//   RENAMED <старое> <новое>, NAME <своё новое имя>.
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Clipvey.Core;
@@ -52,7 +63,7 @@ switch (command)
 {
     case "list":
         foreach (var device in store.Load())
-            Emit($"DEVICE {device.DeviceId} {device.Name} enabled={device.Enabled} {device.LastHost}:{device.LastPort}");
+            Emit($"DEVICE {device.DeviceId} {device.Name} enabled={device.Enabled} {device.LastHost}:{device.LastPort} os={device.Os ?? "-"} form={device.Form ?? "-"} alias={device.Alias ?? "-"}");
         return 0;
     case "enable" or "disable":
         var fragment = arguments.Count > 1 ? arguments[1] : "";
@@ -64,11 +75,12 @@ switch (command)
         return 0;
     case "discover":
         foreach (var device in await MdnsBrowser.BrowseAsync(TimeSpan.FromSeconds(3), CancellationToken.None))
-            Emit($"FOUND {device.Name} id={device.DeviceId} pair={device.Pairing} port={device.Port} addresses={string.Join(',', device.Addresses)}");
+            Emit($"FOUND {device.Name} id={device.DeviceId} pair={device.Pairing} port={device.Port} addresses={string.Join(',', device.Addresses)} os={device.Os ?? "-"} form={device.Form ?? "-"}");
         return 0;
 }
 
-await using var node = new ClipveyNode(identity, store, deviceName, port);
+var deviceType = new DeviceType(Option("--os") ?? "windows", Option("--form") ?? "desktop");
+await using var node = new ClipveyNode(identity, store, deviceName, port, deviceType, imagesEnabled: Option("--images") != "off");
 using var finished = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
 // kill (SIGTERM) и Ctrl+C завершают штатно: узел закрывается и рассылает mDNS-«прощание».
 // Иначе запись двойника ещё 2 минуты висит в кэше mDNS у других устройств.
@@ -83,6 +95,23 @@ using var onInterrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, StopO
 node.ClipReceived += (text, from) => Emit($"CLIP {from} {JsonSerializer.Serialize(text)}");
 node.PairingSucceeded += peer => Emit($"PAIRED {peer}");
 node.PairingFailed += reason => Emit($"PAIRING_FAILED {reason}");
+node.ImageReceived += (data, mime, from) =>
+{
+    var hash = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+    if (Option("--save-images") is { } saveDirectory)
+    {
+        Directory.CreateDirectory(saveDirectory);
+        File.WriteAllBytes(Path.Combine(saveDirectory, hash + (mime == "image/jpeg" ? ".jpg" : ".png")), data);
+    }
+    Emit($"IMAGE {from} {data.Length} {hash}");
+};
+node.PeerUpdated += update =>
+{
+    if (update.OldName != update.Name)
+        Emit($"RENAMED {update.OldName} {update.Name}");
+    var caps = update.Caps.Count > 0 ? string.Join(',', update.Caps) : "-";
+    Emit($"INFO {update.Name} os={update.Type.Os ?? "-"} form={update.Type.Form ?? "-"} caps={caps}");
+};
 var lastConnected = new HashSet<string>();
 node.Changed += () =>
 {
@@ -122,7 +151,10 @@ if (Option("--pair-with") is { } target)
     {
         try
         {
-            var candidate = await WaitForCandidateAsync(node, target, finished.Token);
+            var candidate = Option("--pair-address") is { } address
+                ? new DiscoveredDevice(target, int.Parse(address[(address.LastIndexOf(':') + 1)..]),
+                    [System.Net.IPAddress.Parse(address[..address.LastIndexOf(':')])], null, true)
+                : await WaitForCandidateAsync(node, target, finished.Token);
             Emit($"PAIRING_WITH {candidate.Name}");
             await node.PairWithAsync(candidate, (_, ct) => ReadCodeAsync(ct), () => Emit("CODE_ACCEPTED"), finished.Token);
         }
@@ -133,7 +165,7 @@ if (Option("--pair-with") is { } target)
     });
 }
 
-if (Option("--send") is { } textToSend)
+if (Option("--send") is not null || Option("--send-image") is not null)
 {
     _ = Task.Run(async () =>
     {
@@ -143,8 +175,29 @@ if (Option("--send") is { } textToSend)
             await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
         if (finished.IsCancellationRequested)
             return;
-        await node.BroadcastClipAsync(textToSend);
-        Emit("SENT");
+        if (Option("--send") is { } textToSend)
+        {
+            await node.BroadcastClipAsync(textToSend);
+            Emit("SENT");
+        }
+        if (Option("--send-image") is { } imageFile)
+        {
+            var mime = Path.GetExtension(imageFile).ToLowerInvariant() is ".jpg" or ".jpeg" ? "image/jpeg" : "image/png";
+            var recipients = node.SendImage(await File.ReadAllBytesAsync(imageFile), mime, Flag("--ignore-image-limit"));
+            Emit($"IMAGE_SENT {recipients}");
+        }
+    });
+}
+
+if (arguments.IndexOf("--rename-after") is var renameIndex and >= 0 && renameIndex + 2 < arguments.Count
+    && double.TryParse(arguments[renameIndex + 1], System.Globalization.CultureInfo.InvariantCulture, out var renameSeconds))
+{
+    var newName = arguments[renameIndex + 2];
+    _ = Task.Run(async () =>
+    {
+        await Task.Delay(TimeSpan.FromSeconds(renameSeconds), finished.Token);
+        node.SetName(newName);
+        Emit($"NAME {node.Name}");
     });
 }
 

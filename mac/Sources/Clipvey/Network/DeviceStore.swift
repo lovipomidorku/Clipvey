@@ -2,13 +2,21 @@ import Foundation
 
 /// Связанное устройство и последний адрес, по которому с ним удалось соединиться.
 /// enabled = false — связь сохранена, но синхронизация с устройством выключена.
+/// os, form и alias появились после 0.1.0: в старых файлах их нет, тогда они nil.
 struct StoredDevice: Codable, Equatable, Sendable {
     let deviceID: String
+    /// Имя, которое устройство сообщает о себе (pair_*, ready, info).
     var name: String
     let publicKey: Data
     var lastHost: String?
     var lastPort: Int
     var enabled: Bool
+    var os: String?
+    var form: String?
+    /// Локальный псевдоним, заданный пользователем этого Mac; nil — показывать name.
+    var alias: String?
+
+    var type: DeviceType { DeviceType(os: os, form: form) }
 }
 
 /// Список связанных устройств в devices.json.
@@ -41,10 +49,23 @@ final class DeviceStore {
         update(id: id) { $0.enabled = enabled }
     }
 
-    /// port = nil — оставить прежний (у входящего соединения порт слушателя другой стороны неизвестен).
-    func updateEndpoint(id: String, name: String, host: String, port: Int?) {
+    /// alias = nil — сбросить псевдоним.
+    func setAlias(_ alias: String?, id: String) {
+        update(id: id) { $0.alias = alias }
+    }
+
+    /// Имя и тип из ready или info. nil — поле не пришло, оставить прежнее.
+    func updateInfo(id: String, name: String?, type: DeviceType) {
         update(id: id) { device in
-            device.name = name
+            if let name, !name.isEmpty { device.name = name }
+            if let os = type.os { device.os = os }
+            if let form = type.form { device.form = form }
+        }
+    }
+
+    /// port = nil — оставить прежний (у входящего соединения порт слушателя другой стороны неизвестен).
+    func updateEndpoint(id: String, host: String, port: Int?) {
+        update(id: id) { device in
             device.lastHost = host
             if let port {
                 device.lastPort = port

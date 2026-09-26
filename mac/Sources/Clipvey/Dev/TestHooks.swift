@@ -11,10 +11,15 @@ import AppKit
 ///   --code-file FILE       взять код для роли I из файла со строкой «PAIRING_CODE 123456»
 ///   --send TEXT            после подключения отправить текст (--send-delay N — подождать ещё N с)
 ///   --exit-after N         выйти через N секунд
+///   --images off           выключить «Передавать картинки» (настройка не сохраняется)
+///   --rename-after N NAME  через N секунд после запуска сменить своё имя
+/// Узел печатает также «INFO имя os=… form=… caps=…», «RENAMED старое новое», «IMAGE от размер sha256hex».
 @MainActor
 enum TestHooks {
     static private(set) var enabled = false
     static private(set) var autoConfirm = false
+    static private(set) var imagesEnabled = true
+    private static var renameAfter: (seconds: Double, name: String)?
     static private(set) var dataDirectory: URL?
     static private(set) var pasteboardName: String?
     static private(set) var deviceName: String?
@@ -42,6 +47,11 @@ enum TestHooks {
         sendText = value("--send")
         sendDelay = value("--send-delay").flatMap(Double.init) ?? 0
         exitAfter = value("--exit-after").flatMap(Double.init)
+        imagesEnabled = value("--images") != "off"
+        if let index = arguments.firstIndex(of: "--rename-after"), index + 2 < arguments.count,
+           let seconds = Double(arguments[index + 1]) {
+            renameAfter = (seconds, arguments[index + 2])
+        }
     }
 
     static func emit(_ line: String) {
@@ -81,6 +91,13 @@ enum TestHooks {
                 try? await Task.sleep(for: .seconds(sendDelay))
                 node.broadcast(sendText)
                 emit("SENT")
+            }
+        }
+        if let renameAfter {
+            Task {
+                try? await Task.sleep(for: .seconds(renameAfter.seconds))
+                node.setName(renameAfter.name)
+                emit("NAME \(node.name)")
             }
         }
         if let exitAfter {

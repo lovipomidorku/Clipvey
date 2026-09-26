@@ -23,7 +23,10 @@ internal sealed class TrayApplication : ApplicationContext
     {
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         var identity = Identity.LoadOrCreate(new DpapiSecretStore(AppPaths.DataDirectory));
-        _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), Environment.MachineName);
+        // Тип устройства: ноутбук, если есть батарея.
+        var form = SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
+        _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
+            deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled);
         _watcher = new ClipboardWatcher(OnLocalCopy);
 
         _tray = new NotifyIcon
@@ -61,12 +64,27 @@ internal sealed class TrayApplication : ApplicationContext
         });
         _node.PairingFailed += reason => OnUi(() =>
         {
-            _form?.ShowResult(reason);
+            _form?.ShowResult(TrayPanel.FailureText(reason));
             Refresh();
         });
 
         _node.Start();
         Refresh();
+    }
+
+    /// Сменить своё имя: сохранить и передать узлу. Пустое — имя компьютера.
+    public void Rename(string newName)
+    {
+        var normalized = ClipveyNode.NormalizeName(newName);
+        AppSettings.DeviceName = normalized.Length > 0 ? normalized : null;
+        _node.SetName(normalized.Length > 0 ? normalized : Environment.MachineName);
+    }
+
+    /// «Передавать картинки»: сохранить и передать узлу.
+    public void SetImagesEnabled(bool enabled)
+    {
+        AppSettings.ImagesEnabled = enabled;
+        _node.SetImagesEnabled(enabled);
     }
 
     /// Меню по правой кнопке. Пересобирается целиком при смене языка.

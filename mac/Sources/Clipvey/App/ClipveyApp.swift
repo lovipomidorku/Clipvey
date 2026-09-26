@@ -98,7 +98,12 @@ final class AppModel {
         keepAwake = Settings.keepAwake
         do {
             let identity = try DeviceIdentity.loadOrCreate(at: directory.appendingPathComponent("identity.key"))
-            node = ClipveyNode(identity: identity, name: TestHooks.deviceName ?? AppInfo.deviceName, store: DeviceStore(directory: directory))
+            node = ClipveyNode(
+                identity: identity,
+                name: TestHooks.deviceName ?? Settings.deviceName ?? AppInfo.deviceName,
+                deviceType: AppInfo.deviceType,
+                imagesEnabled: TestHooks.enabled ? TestHooks.imagesEnabled : Settings.imagesEnabled,
+                store: DeviceStore(directory: directory))
             startupError = nil
         } catch {
             node = nil
@@ -113,8 +118,22 @@ final class AppModel {
             self?.bridge.write(text)
             self?.lastSync = LastSync(date: Date(), direction: .received(from: from))
         }
+        node.onImageReceived = { [weak self] data, mime, from in
+            self?.bridge.writeImage(data, mime: mime)
+            self?.lastSync = LastSync(date: Date(), direction: .received(from: from))
+        }
         node.onConnectionsChanged = { [weak self] _ in self?.updateSleepGuard() }
         bridge.shouldRead = { [weak node] in node?.devices.contains(where: \.connected) ?? false }
+        bridge.shouldReadImages = { [weak node] in
+            guard let node, node.imagesEnabled else { return false }
+            return node.devices.contains { $0.connected && $0.enabled && $0.acceptsImages }
+        }
+        bridge.onCopyImage = { [weak self, weak node] data, mime in
+            guard let node else { return }
+            if node.sendImage(data, mime: mime) > 0 {
+                self?.lastSync = LastSync(date: Date(), direction: .sent)
+            }
+        }
         bridge.onCopy = { [weak self, weak node] text in
             guard let node else { return }
             // Узел шлёт только подключённым включённым устройствам; если их нет, отправки не было.
@@ -129,6 +148,28 @@ final class AppModel {
         bridge.start()
         TestHooks.run(node)
         observeTooltip()
+    }
+
+    // MARK: - Имя и картинки (настройки хранит приложение, узел только применяет)
+
+    /// Сменить своё имя: сохранить и передать узлу (TXT, Bonjour, info всем сеансам). Пустое — имя компьютера.
+    func rename(_ newName: String) {
+        let normalized = ClipveyNode.normalizedName(newName)
+        if !TestHooks.enabled {
+            Settings.deviceName = normalized.isEmpty ? nil : normalized
+        }
+        node?.setName(normalized.isEmpty ? AppInfo.deviceName : normalized)
+    }
+
+    /// «Передавать картинки».
+    var imagesEnabled: Bool {
+        get { node?.imagesEnabled ?? Settings.imagesEnabled }
+        set {
+            if !TestHooks.enabled {
+                Settings.imagesEnabled = newValue
+            }
+            node?.setImagesEnabled(newValue)
+        }
     }
 
     // MARK: - Значок в строке меню

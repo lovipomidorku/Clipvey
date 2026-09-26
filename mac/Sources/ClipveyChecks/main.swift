@@ -69,11 +69,28 @@ func keyEntry(_ key: P256.KeyAgreement.PrivateKey) -> [String: Any] {
     ["private": key.rawRepresentation.hex, "public": key.publicKey.x963Representation.hex]
 }
 
-/// Сообщения для проверки кодировки: по одному каждого вида.
+/// Данные картинки для проверки нарезки: байт i = i mod 251 (не кратно 512 КиБ, три куска).
+let blobLength = 1_100_000
+let blobData = Data((0..<blobLength).map { UInt8($0 % 251) })
+
+/// Сообщения для проверки кодировки: по одному каждого вида. Имя образца совпадает с t,
+/// кроме вариантов с новыми полями (у них t записано в поле "type" образца).
 func sampleMessages(keyI: Data, keyR: Data, commit: Data, nonceI: Data, nonceR: Data, ephI: Data, ephR: Data, idI: String, idR: String) -> [(String, WireMessage)] {
     [
-        ("pair_hello", .pairHello(name: "MacBook — Лена", key: keyI)),
-        ("pair_commit", .pairCommit(name: "OFFICE-PC", key: keyR, commit: commit)),
+        // Без новых полей — как у 0.1.0.
+        ("pair_hello", .pairHello(name: "MacBook — Лена", key: keyI, type: .unknown)),
+        ("pair_commit", .pairCommit(name: "OFFICE-PC", key: keyR, commit: commit, type: .unknown)),
+        ("pair_hello_typed", .pairHello(name: "MacBook — Лена", key: keyI, type: DeviceType(os: "mac", form: "laptop"))),
+        ("pair_commit_typed", .pairCommit(name: "OFFICE-PC", key: keyR, commit: commit, type: DeviceType(os: "windows", form: "desktop"))),
+        ("ready_full", .ready(PeerInfo(name: "OFFICE-PC", type: DeviceType(os: "windows", form: "desktop"), caps: ["image"]))),
+        ("info", .info(PeerInfo(name: "Кухня / ноутбук", type: DeviceType(os: "mac", form: "laptop"), caps: ["image"]))),
+        ("info_name_only", .info(PeerInfo(name: "Новое имя"))),
+        ("info_caps_empty", .info(PeerInfo(caps: []))),
+        ("blob_start", .blobStart(BlobStart(
+            id: "ffeeddccbbaa99887766554433221100", origin: idI, hops: 1,
+            mime: "image/png", size: blobLength, sha256: Blob.sha256(blobData)))),
+        ("blob_chunk", .blobChunk(id: "ffeeddccbbaa99887766554433221100", seq: 2, data: Data("последний кусок 😀".utf8))),
+        ("blob_end", .blobEnd(id: "ffeeddccbbaa99887766554433221100")),
         ("pair_nonce", .pairNonce(nonceI)),
         ("pair_reveal", .pairReveal(nonceR)),
         ("pair_verified", .pairVerified),
@@ -82,7 +99,7 @@ func sampleMessages(keyI: Data, keyR: Data, commit: Data, nonceI: Data, nonceR: 
         ("error", .error(reason: "disabled")),
         ("hello", .hello(id: idI, ephemeral: ephI)),
         ("hello_ack", .helloAck(id: idR, ephemeral: ephR)),
-        ("ready", .ready(name: "Кухня / ноутбук")),
+        ("ready", .ready(PeerInfo(name: "Кухня / ноутбук"))),
         ("clip", .clip(ClipPayload(
             id: "00112233445566778899aabbccddeeff",
             origin: idI,
@@ -146,8 +163,21 @@ func generate() -> [String: Any] {
     let messages: [[String: Any]] = sampleMessages(
         keyI: pkI, keyR: pkR, commit: commit, nonceI: nonceI, nonceR: nonceR, ephI: eI, ephR: eR, idI: idI, idR: idR
     ).map { name, message in
-        ["name": name, "json": String(decoding: message.encode(), as: UTF8.self)]
+        var entry: [String: Any] = ["name": name, "json": String(decoding: message.encode(), as: UTF8.self)]
+        if name != message.type {
+            entry["type"] = message.type
+        }
+        return entry
     }
+
+    let ranges = Blob.chunkRanges(size: blobLength)
+    let blob: [String: Any] = [
+        "comment": "Нарезка картинки: байт i = i mod 251, длина length. Куски — по 524288 байт, последний короче.",
+        "length": blobLength,
+        "sha256": Blob.sha256(blobData).base64EncodedString(),
+        "chunk_sizes": ranges.map(\.count),
+        "chunk_sha256": ranges.map { Blob.sha256(blobData.subdata(in: $0)).hex },
+    ]
 
     return [
         "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\uD83D\\uDE00 в .NET) у реализаций разные.",
@@ -175,6 +205,7 @@ func generate() -> [String: Any] {
         ],
         "frames": frames,
         "messages": messages,
+        "blob": blob,
     ]
 }
 
@@ -286,7 +317,7 @@ var failures: [String] = []
             check("сообщение \(name): разбор", false, "не разобрано")
             continue
         }
-        expectEqual("сообщение \(name): тип", decoded.type, name)
+        expectEqual("сообщение \(name): тип", decoded.type, message["type"] ?? name)
         let encoded = decoded.encode()
         check("сообщение \(name): тот же объект JSON", jsonObject(encoded) == jsonObject(expected),
               "получено \(String(decoding: encoded, as: UTF8.self))")
@@ -322,6 +353,9 @@ var failures: [String] = []
     check("чужой ключ не на кривой отвергается",
           (try? ClipveyCrypto.publicKey(from: Data([0x04] + [UInt8](repeating: 1, count: 64)))) == nil)
 
+    verifyNewFields(v)
+    verifyBlob(v)
+
     // Подпись релиза (docs/releases.md): base64 r‖s, ECDSA P-256 с SHA-256, одноразовый ключ.
     if let release = v["release_signature"] as? [String: String] {
         let key = try? P256.Signing.PublicKey(x963Representation: Data(base64Encoded: release["public_key"]!)!)
@@ -336,6 +370,129 @@ var failures: [String] = []
     }
 }
 
+/// Новые необязательные поля: без них — значения по умолчанию (как у 0.1.0), с ними — разбираются.
+@MainActor func verifyNewFields(_ v: [String: Any]) {
+    func sample(_ name: String) -> WireMessage? {
+        let messages = v["messages"] as! [[String: String]]
+        guard let json = messages.first(where: { $0["name"] == name })?["json"] else {
+            check("образец \(name) есть", false)
+            return nil
+        }
+        return try? WireMessage.decode(Data(json.utf8))
+    }
+    if case .ready(let info)? = sample("ready") {
+        check("ready без новых полей: caps = nil (ничего)", info.caps == nil)
+        check("ready без новых полей: тип неизвестен", info.type == .unknown)
+    } else {
+        check("ready разбирается", false)
+    }
+    if case .pairHello(_, _, let type)? = sample("pair_hello") {
+        check("pair_hello без os/form: тип неизвестен", type == .unknown)
+    } else {
+        check("pair_hello разбирается", false)
+    }
+    if case .pairCommit(_, _, _, let type)? = sample("pair_commit_typed") {
+        check("pair_commit: os и form", type == DeviceType(os: "windows", form: "desktop"))
+    } else {
+        check("pair_commit_typed разбирается", false)
+    }
+    if case .ready(let info)? = sample("ready_full") {
+        check("ready: все поля", info == PeerInfo(name: "OFFICE-PC", type: DeviceType(os: "windows", form: "desktop"), caps: ["image"]))
+    } else {
+        check("ready_full разбирается", false)
+    }
+    if case .info(let info)? = sample("info_caps_empty") {
+        check("info с caps: [] — пустой набор, имя не изменилось", info.caps == [] && info.name == nil)
+    } else {
+        check("info_caps_empty разбирается", false)
+    }
+    if case .info(let info)? = try? WireMessage.decode(Data(#"{"t":"info"}"#.utf8)) {
+        check("пустой info: ничего не изменилось", info == PeerInfo())
+    } else {
+        check("пустой info разбирается", false)
+    }
+    // Неверные типы необязательных полей — как будто поля нет; не строки в caps пропускаются.
+    if case .ready(let info)? = try? WireMessage.decode(Data(#"{"t":"ready","name":5,"os":true,"caps":["image",3]}"#.utf8)) {
+        check("ready с неверными типами полей", info.name == nil && info.type.os == nil && info.caps == ["image"])
+    } else {
+        check("ready с неверными типами полей разбирается", false)
+    }
+    // Неверный blob_start не рвёт сеанс: разбирается, но картинка отвергается.
+    let badStart = #"{"t":"blob_start","id":"a","origin":"b","hops":0,"kind":"file","mime":"image/gif","size":"big","sha256":"***"}"#
+    if case .blobStart(let start)? = try? WireMessage.decode(Data(badStart.utf8)) {
+        check("неверный blob_start разбирается и отвергается", BlobAssembly.refusal(start) != nil)
+    } else {
+        check("неверный blob_start разбирается", false)
+    }
+    if case .blobChunk(_, _, let data)? = try? WireMessage.decode(Data(#"{"t":"blob_chunk","id":"a","seq":0,"data":"***"}"#.utf8)) {
+        check("blob_chunk с не-base64: данных нет", data == nil)
+    } else {
+        check("blob_chunk с не-base64 разбирается", false)
+    }
+}
+
+/// Нарезка и сборка картинки по разделу blob.
+@MainActor func verifyBlob(_ v: [String: Any]) {
+    guard let blob = v["blob"] as? [String: Any],
+          let length = blob["length"] as? Int,
+          let sizes = blob["chunk_sizes"] as? [Int],
+          let hashes = blob["chunk_sha256"] as? [String],
+          let sha = (blob["sha256"] as? String).flatMap({ Data(base64Encoded: $0) }) else {
+        check("раздел blob", false, "нет или неполный")
+        return
+    }
+    let data = Data((0..<length).map { UInt8($0 % 251) })
+    expectEqual("картинка: sha256", Blob.sha256(data).base64EncodedString(), sha.base64EncodedString())
+    let ranges = Blob.chunkRanges(size: length)
+    check("картинка: размеры кусков", ranges.map(\.count) == sizes, "\(ranges.map(\.count))")
+    check("картинка: хеши кусков", ranges.map { Blob.sha256(data.subdata(in: $0)).hex } == hashes)
+    check("картинка: ровно 512 КиБ и 20 МиБ", ProtocolLimits.blobChunkBytes == 524_288 && ProtocolLimits.maxImageBytes == 20_971_520)
+
+    let header = BlobStart(id: "x", origin: "o", hops: 0, mime: "image/png", size: length, sha256: sha)
+    check("картинка: заголовок принимается", BlobAssembly.refusal(header) == nil)
+    var good = BlobAssembly(header)
+    for (seq, range) in ranges.enumerated() {
+        try? good.append(seq: seq, chunk: data.subdata(in: range))
+    }
+    check("картинка: сборка", (try? good.finish()) == data)
+
+    func fails(_ name: String, _ body: (inout BlobAssembly) throws -> Void) {
+        var assembly = BlobAssembly(header)
+        do {
+            try body(&assembly)
+            _ = try assembly.finish()
+            check("картинка отбрасывается: \(name)", false, "принята")
+        } catch {
+            check("картинка отбрасывается: \(name)", true)
+        }
+    }
+    let chunks = ranges.map { data.subdata(in: $0) }
+    fails("пропущен кусок") { try $0.append(seq: 0, chunk: chunks[0]); try $0.append(seq: 2, chunk: chunks[2]) }
+    fails("нехватка данных к концу") { try $0.append(seq: 0, chunk: chunks[0]); try $0.append(seq: 1, chunk: chunks[1]) }
+    fails("не последний кусок короче 512 КиБ") { try $0.append(seq: 0, chunk: chunks[0].prefix(1000)) }
+    fails("данных больше size") {
+        for (seq, chunk) in chunks.enumerated() { try $0.append(seq: seq, chunk: chunk) }
+        try $0.append(seq: chunks.count, chunk: Data([1]))
+    }
+    fails("кусок без данных") { try $0.append(seq: 0, chunk: nil) }
+    var wrongHash = BlobAssembly(BlobStart(id: "x", origin: "o", hops: 0, mime: "image/png", size: length, sha256: Data(repeating: 0, count: 32)))
+    for (seq, chunk) in chunks.enumerated() { try? wrongHash.append(seq: seq, chunk: chunk) }
+    check("картинка отбрасывается: sha256 не совпал", (try? wrongHash.finish()) == nil)
+
+    let refused: [(String, BlobStart)] = [
+        ("kind не image", BlobStart(id: "x", origin: "o", hops: 0, kind: "file", mime: "image/png", size: 10, sha256: sha)),
+        ("mime image/gif", BlobStart(id: "x", origin: "o", hops: 0, mime: "image/gif", size: 10, sha256: sha)),
+        ("size 0", BlobStart(id: "x", origin: "o", hops: 0, mime: "image/png", size: 0, sha256: sha)),
+        ("size больше 20 МиБ", BlobStart(id: "x", origin: "o", hops: 0, mime: "image/jpeg", size: 20_971_521, sha256: sha)),
+        ("sha256 не 32 байта", BlobStart(id: "x", origin: "o", hops: 0, mime: "image/png", size: 10, sha256: sha.prefix(31))),
+    ]
+    for (name, start) in refused {
+        check("картинка не принимается: \(name)", BlobAssembly.refusal(start) != nil)
+    }
+    check("картинка ровно 20 МиБ принимается",
+          BlobAssembly.refusal(BlobStart(id: "x", origin: "o", hops: 0, mime: "image/jpeg", size: 20_971_520, sha256: sha)) == nil)
+}
+
 // MARK: - Запуск
 
 if arguments.contains("--generate") {
@@ -345,6 +502,17 @@ if arguments.contains("--generate") {
        let old = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
         for key in ["release_signature", "foreign_messages"] {
             generated[key] = old[key]
+        }
+        // Порядок ключей у JSONSerialization случайный: равные по смыслу образцы оставляем как были, чтобы не шуметь в diff.
+        if let oldMessages = old["messages"] as? [[String: Any]], var messages = generated["messages"] as? [[String: Any]] {
+            for index in messages.indices {
+                guard let name = messages[index]["name"] as? String,
+                      let previous = oldMessages.first(where: { $0["name"] as? String == name })?["json"] as? String,
+                      let current = messages[index]["json"] as? String,
+                      jsonObject(Data(previous.utf8)) == jsonObject(Data(current.utf8)) else { continue }
+                messages[index]["json"] = previous
+            }
+            generated["messages"] = messages
         }
     }
     let data = try! JSONSerialization.data(withJSONObject: generated, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])

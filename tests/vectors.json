@@ -1,4 +1,19 @@
 {
+  "blob": {
+    "chunk_sha256": [
+      "61d1d9c5745bdaa4fab39240651bc242a5186b15393fd475082fcf6e84f400ab",
+      "c6edd274fd1dde0ecf8b0440b9c38c91a9989ed002b1f54c9ee7079997012d98",
+      "fb603414310ff193bc20a315c50e20071c6aa7f21880723be57e273f4d0a7c0b"
+    ],
+    "chunk_sizes": [
+      524288,
+      524288,
+      51424
+    ],
+    "comment": "Нарезка картинки: байт i = i mod 251, длина length. Куски — по 524288 байт, последний короче.",
+    "length": 1100000,
+    "sha256": "lBhuqiXh3YKUneXrxbuIPd1F/nsUb+MA8CjhLAdlgxU="
+  },
   "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\uD83D\\uDE00 в .NET) у реализаций разные.",
   "device_id": {
     "initiator": "ec2b4635da6e02fc8b8f6095a12ceb88",
@@ -55,6 +70,47 @@
     {
       "json": "{\"name\":\"OFFICE-PC\",\"t\":\"pair_commit\",\"key\":\"BGaKlhdz8p/L2BuWTHpjkUQ7HP0jqAjZMBUgXNzoCGI6mxQaijfZHCDewe49b1FB0O38r3o5NbKrz83GGjvt0lE=\",\"commit\":\"NODVFKJGl2eMN1fNEvhnHYDfsvXyipKpO2ON8Dtbh+A=\"}",
       "name": "pair_commit"
+    },
+    {
+      "json": "{\"os\":\"mac\",\"key\":\"BPFGUdgA4z+DtkwDcZ9MSSV3fxRKSEd8tQtmQPfjXwOWbJ6cR1N/kYpaGqMbdgrB8hoTaghjKMHY3A5/PmvxPGg=\",\"t\":\"pair_hello\",\"v\":1,\"form\":\"laptop\",\"name\":\"MacBook — Лена\"}",
+      "name": "pair_hello_typed",
+      "type": "pair_hello"
+    },
+    {
+      "json": "{\"os\":\"windows\",\"form\":\"desktop\",\"key\":\"BGaKlhdz8p/L2BuWTHpjkUQ7HP0jqAjZMBUgXNzoCGI6mxQaijfZHCDewe49b1FB0O38r3o5NbKrz83GGjvt0lE=\",\"t\":\"pair_commit\",\"name\":\"OFFICE-PC\",\"commit\":\"NODVFKJGl2eMN1fNEvhnHYDfsvXyipKpO2ON8Dtbh+A=\"}",
+      "name": "pair_commit_typed",
+      "type": "pair_commit"
+    },
+    {
+      "json": "{\"form\":\"desktop\",\"name\":\"OFFICE-PC\",\"caps\":[\"image\"],\"os\":\"windows\",\"t\":\"ready\"}",
+      "name": "ready_full",
+      "type": "ready"
+    },
+    {
+      "json": "{\"t\":\"info\",\"caps\":[\"image\"],\"form\":\"laptop\",\"os\":\"mac\",\"name\":\"Кухня / ноутбук\"}",
+      "name": "info"
+    },
+    {
+      "json": "{\"t\":\"info\",\"name\":\"Новое имя\"}",
+      "name": "info_name_only",
+      "type": "info"
+    },
+    {
+      "json": "{\"t\":\"info\",\"caps\":[]}",
+      "name": "info_caps_empty",
+      "type": "info"
+    },
+    {
+      "json": "{\"t\":\"blob_start\",\"origin\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"hops\":1,\"kind\":\"image\",\"size\":1100000,\"id\":\"ffeeddccbbaa99887766554433221100\",\"mime\":\"image/png\",\"sha256\":\"lBhuqiXh3YKUneXrxbuIPd1F/nsUb+MA8CjhLAdlgxU=\"}",
+      "name": "blob_start"
+    },
+    {
+      "json": "{\"seq\":2,\"id\":\"ffeeddccbbaa99887766554433221100\",\"data\":\"0L/QvtGB0LvQtdC00L3QuNC5INC60YPRgdC+0Log8J+YgA==\",\"t\":\"blob_chunk\"}",
+      "name": "blob_chunk"
+    },
+    {
+      "json": "{\"t\":\"blob_end\",\"id\":\"ffeeddccbbaa99887766554433221100\"}",
+      "name": "blob_end"
     },
     {
       "json": "{\"nonce\":\"6gdsUeq+igk5hqA1uP3/UZYrzwk+2Rv6edilbZ/OaTk=\",\"t\":\"pair_nonce\"}",

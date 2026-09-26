@@ -5,7 +5,12 @@ using System.Text;
 
 namespace Clipvey.Core;
 
-public sealed record DiscoveredDevice(string Name, int Port, IReadOnlyList<IPAddress> Addresses, string? DeviceId, bool Pairing);
+/// Os и Form — из TXT, если устройство их объявляет (иначе null).
+public sealed record DiscoveredDevice(
+    string Name, int Port, IReadOnlyList<IPAddress> Addresses, string? DeviceId, bool Pairing, string? Os = null, string? Form = null)
+{
+    public DeviceType Type => new(Os, Form);
+}
 
 internal static class LocalNetwork
 {
@@ -176,7 +181,9 @@ public static class MdnsBrowser
                 srv.Port,
                 addresses,
                 txt?.Values.GetValueOrDefault("id"),
-                txt?.Values.GetValueOrDefault("pair") == "1"));
+                txt?.Values.GetValueOrDefault("pair") == "1",
+                txt?.Values.GetValueOrDefault("os"),
+                txt?.Values.GetValueOrDefault("form")));
         }
         return result;
     }
@@ -190,7 +197,8 @@ public sealed class MdnsAdvertiser : IDisposable
     private const int MulticastTtl = 120;
     private const int LegacyUnicastTtl = 10;
 
-    private readonly DnsName _instance;
+    // Меняется при переименовании (Rename); читается потоком ответов.
+    private volatile DnsName _instance;
     private readonly DnsName _host;
     private readonly int _port;
     private readonly Func<IReadOnlyDictionary<string, string>> _txt;
@@ -227,6 +235,9 @@ public sealed class MdnsAdvertiser : IDisposable
         }
         socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
         socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastLoopback, true);
+        // Отправка через «застрявший» интерфейс (например, туннель VPN, который не читает multicast) иначе
+        // может заблокироваться навсегда: тогда не уходили бы ни объявления, ни «прощание» при выходе.
+        socket.SendTimeout = 500;
 
         _socket = socket;
         _stop = new CancellationTokenSource();
@@ -235,13 +246,38 @@ public sealed class MdnsAdvertiser : IDisposable
         Log.Write($"mDNS: объявлено «{_instance.Parts[0]}» на порту {_port}");
     }
 
+    /// Сменить имя экземпляра: «прощание» (TTL 0) для записей старого имени, затем объявление нового.
+    /// Запись A имени хоста не прощается: имя хоста не меняется. Рассылка — в фоне, как и Announce.
+    public void Rename(string instanceName)
+    {
+        var old = _instance;
+        var renamed = new DnsName([instanceName, .. LocalNetwork.ServiceName.Parts]);
+        if (renamed.ToString() == old.ToString())
+            return;
+        var goodbye = DnsResourceWriter.Response(null,
+        [
+            DnsResourceWriter.Ptr(LocalNetwork.ServiceName, old, 0),
+            DnsResourceWriter.Srv(old, _port, _host, 0, cacheFlush: true),
+            DnsResourceWriter.Txt(old, _txt(), 0, cacheFlush: true),
+        ]);
+        _instance = renamed;
+        Log.Write($"mDNS: «{old.Parts[0]}» переименовано в «{instanceName}»");
+        _ = Task.Run(async () =>
+        {
+            SendMulticast(goodbye);
+            await AnnounceAsync();
+        });
+    }
+
     /// Разослать свои записи без запроса (при запуске и когда меняется TXT, например режим связывания).
-    public void Announce() => _ = Task.Run(async () =>
+    public void Announce() => _ = Task.Run(AnnounceAsync);
+
+    private async Task AnnounceAsync()
     {
         SendMulticast(BuildResponse(MulticastTtl, legacyQuery: null));
         await Task.Delay(1000);
         SendMulticast(BuildResponse(MulticastTtl, legacyQuery: null));
-    });
+    }
 
     private async Task ReceiveLoopAsync(Socket socket, CancellationToken ct)
     {
