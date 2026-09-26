@@ -15,5 +15,11 @@ let package = Package(
             dependencies: ["ClipveyProtocol"],
             path: "Sources/Clipvey"
         ),
+        // Проверка по tests/vectors.json: swift run clipvey-checks. swift test без Xcode не работает.
+        .executableTarget(
+            name: "clipvey-checks",
+            dependencies: ["ClipveyProtocol"],
+            path: "Sources/ClipveyChecks"
+        ),
     ]
 )

@@ -1,0 +1,129 @@
+{
+  "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\ud83d\\ude00 в .NET) у реализаций разные.",
+  "device_id": {
+    "initiator": "ec2b4635da6e02fc8b8f6095a12ceb88",
+    "responder": "a51edaffc182c417fd12315efd5c0ee4"
+  },
+  "foreign_messages": [
+    {
+      "json": "{\"t\":\"clip\",\"id\":\"00112233445566778899aabbccddeeff\",\"origin\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"hops\":3,\"text\":\"Привет, мир!\\nhttps://example.com/путь?a=1&b=2 — «кавычки» \\\"двойные\\\" \\\\ обратная черта\\ttab \\uD83D\\uDE00\"}",
+      "name": "clip_dotnet",
+      "text": "Привет, мир!\nhttps://example.com/путь?a=1&b=2 — «кавычки» \"двойные\" \\ обратная черта\ttab 😀"
+    }
+  ],
+  "frames": [
+    {
+      "counter": "0",
+      "key": "1b5fac802ea52916faf0640ba37c382497c9e9fabc8a0bbedaac759b5f14c3bd",
+      "name": "I→R, первый кадр",
+      "nonce": "000000000000000000000000",
+      "payload": "087adc91d59c3303bf2172d0b030c6125f57bd210d0843b0539a0d89c0cf507d15e7ca3f7ffb96001d2f13414f3d7742eb805b4412b82dd9f6b48bf023fb128cc6ab",
+      "plaintext": "7b2274223a227265616479222c226e616d65223a22d09ad183d185d0bdd18f202f20d0bdd0bed183d182d0b1d183d0ba227d"
+    },
+    {
+      "counter": "72623859790382856",
+      "key": "5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
+      "name": "R→I, счётчик 0x0102030405060708",
+      "nonce": "000000000102030405060708",
+      "payload": "92cf4530cfb40a7dfff02240e48fd10fdc922c5aa611af2110f56d93",
+      "plaintext": "7b2274223a2270696e67227d"
+    }
+  ],
+  "keys": {
+    "initiator_ephemeral": {
+      "private": "3e81d371f3040d2cb46bb6edf6ebcf5f140003094b8f4a93c280c98b9cb370f5",
+      "public": "04865fe0240262597c98cf2b4f24e7bb474d394886e65d6e720be70c4ffefceeacdc2c7ed344c2b16347b58add68373e92d608be8b30f50b66e6baf6714e3c6bad"
+    },
+    "initiator_static": {
+      "private": "5b0c0e99dc13df3a596990dd08c2772a15a82f1c79449a36eabf7bd9917d1ecb",
+      "public": "04f14651d800e33f83b64c03719f4c4925777f144a48477cb50b6640f7e35f03966c9e9c47537f918a5a1aa31b760ac1f21a136a086328c1d8dc0e7f3e6bf13c68"
+    },
+    "responder_ephemeral": {
+      "private": "92ec906cc562c4d62f2a2a56e63c94d0aa5fa5a5a4bb3468c8101cee0ee57ba3",
+      "public": "0416793094bf5e41d1cce302d63b1748029d6362e1c9f61ce7885208483c4995591ce3499071db99cec16fec9a0294d4c5171c79da05f1db6a7f95500f7ca1772e"
+    },
+    "responder_static": {
+      "private": "c4d970048aded483d54c7e5d00aa1e6135fc87c19a29e031f500c5146011b45d",
+      "public": "04668a961773f29fcbd81b964c7a6391443b1cfd23a808d93015205cdce808623a9b141a8a37d91c20dec1ee3d6f5141d0edfcaf7a3935b2abcfcdc61a3bedd251"
+    }
+  },
+  "messages": [
+    {
+      "json": "{\"name\":\"MacBook — Лена\",\"t\":\"pair_hello\",\"v\":1,\"key\":\"BPFGUdgA4z+DtkwDcZ9MSSV3fxRKSEd8tQtmQPfjXwOWbJ6cR1N/kYpaGqMbdgrB8hoTaghjKMHY3A5/PmvxPGg=\"}",
+      "name": "pair_hello"
+    },
+    {
+      "json": "{\"name\":\"OFFICE-PC\",\"t\":\"pair_commit\",\"key\":\"BGaKlhdz8p/L2BuWTHpjkUQ7HP0jqAjZMBUgXNzoCGI6mxQaijfZHCDewe49b1FB0O38r3o5NbKrz83GGjvt0lE=\",\"commit\":\"NODVFKJGl2eMN1fNEvhnHYDfsvXyipKpO2ON8Dtbh+A=\"}",
+      "name": "pair_commit"
+    },
+    {
+      "json": "{\"nonce\":\"6gdsUeq+igk5hqA1uP3/UZYrzwk+2Rv6edilbZ/OaTk=\",\"t\":\"pair_nonce\"}",
+      "name": "pair_nonce"
+    },
+    {
+      "json": "{\"nonce\":\"DpzhBRIlz42/Ae9DwMql4YlPLhUeEWNxg/iGp+buxto=\",\"t\":\"pair_reveal\"}",
+      "name": "pair_reveal"
+    },
+    {
+      "json": "{\"t\":\"pair_verified\"}",
+      "name": "pair_verified"
+    },
+    {
+      "json": "{\"t\":\"pair_done\"}",
+      "name": "pair_done"
+    },
+    {
+      "json": "{\"t\":\"pair_abort\",\"reason\":\"code\"}",
+      "name": "pair_abort"
+    },
+    {
+      "json": "{\"reason\":\"disabled\",\"t\":\"error\"}",
+      "name": "error"
+    },
+    {
+      "json": "{\"v\":1,\"id\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"t\":\"hello\",\"eph\":\"BIZf4CQCYll8mM8rTyTnu0dNOUiG5l1ucgvnDE/+/O6s3Cx+00TCsWNHtYrdaDc+ktYIvosw9Qtm5rr2cU48a60=\"}",
+      "name": "hello"
+    },
+    {
+      "json": "{\"t\":\"hello_ack\",\"eph\":\"BBZ5MJS/XkHRzOMC1jsXSAKdY2LhyfYc54hSCEg8SZVZHONJkHHbmc7Bb+yaApTUxRccedoF8dtqf5VQD3yhdy4=\",\"id\":\"a51edaffc182c417fd12315efd5c0ee4\"}",
+      "name": "hello_ack"
+    },
+    {
+      "json": "{\"name\":\"Кухня / ноутбук\",\"t\":\"ready\"}",
+      "name": "ready"
+    },
+    {
+      "json": "{\"origin\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"hops\":3,\"text\":\"Привет, мир!\\nhttps://example.com/путь?a=1&b=2 — «кавычки» \\\"двойные\\\" \\\\ обратная черта\\ttab 😀\",\"t\":\"clip\",\"id\":\"00112233445566778899aabbccddeeff\"}",
+      "name": "clip"
+    },
+    {
+      "json": "{\"t\":\"ping\"}",
+      "name": "ping"
+    },
+    {
+      "json": "{\"t\":\"pong\"}",
+      "name": "pong"
+    }
+  ],
+  "pairing": {
+    "code": "008269",
+    "commit": "34e0d514a24697678c3757cd12f8671d80dfb2f5f28a92a93b638df03b5b87e0",
+    "initiator_nonce": "ea076c51eabe8a093986a035b8fdff51962bcf093ed91bfa79d8a56d9fce6939",
+    "responder_nonce": "0e9ce1051225cf8dbf01ef43c0caa5e1894f2e151e11637183f886a7e6eec6da"
+  },
+  "release_signature": {
+    "comment": "Одноразовый ключ только для проверок (не ключ релизов). Подпись — scripts/sign-release.swift sign.",
+    "message": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  Clipvey-mac.zip\nfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210  Clipvey.exe\n",
+    "public_key": "BPA9b6vTmTXbcGLaIXUW4W/ySuA5GuNrnVIJI67ZrLgYeGgivI6VKWUg3oKh9J3wrH0jRmTRavfnAWVNnOJfjL8=",
+    "signature": "tG8dhDCUYDppuALTJD1XFzE87ubjVNvX68viTuGTYDvfkqUuCiF8oD+2CNrYQSldBDnbM05221WJytP0VDMddQ=="
+  },
+  "session": {
+    "dh1": "2698defc6378d50b9a7801e2055b39f35598962a5a1679f42013117f1aa878ae",
+    "dh2": "6759ec9af28606896cb472ead035b7f31477c4dc04cb920e6011b4b2f3d07a2e",
+    "dh3": "afeccb509c39a29d072e14a671a081ee50eb986db7f1dc9ada32f32c05ba216d",
+    "k_ir": "1b5fac802ea52916faf0640ba37c382497c9e9fabc8a0bbedaac759b5f14c3bd",
+    "k_ri": "5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
+    "okm": "1b5fac802ea52916faf0640ba37c382497c9e9fabc8a0bbedaac759b5f14c3bd5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
+    "th": "0e651d3055ef78f12904500693c0f1dd95650faa49ae72e47ed59e0c51f2ff9b"
+  }
+}

@@ -150,7 +150,14 @@ public sealed class SecureChannel : IAsyncDisposable
         return Messages.Decode(plaintext);
     }
 
-    private static byte[] Nonce(ulong counter)
+    /// Для проверок (Clipvey.Tests, tests/vectors.json): начать с заданных счётчиков.
+    internal void SetCounters(ulong send, ulong receive)
+    {
+        _sendCounter = send;
+        _receiveCounter = receive;
+    }
+
+    internal static byte[] Nonce(ulong counter)
     {
         var nonce = new byte[12];
         BinaryPrimitives.WriteUInt64BigEndian(nonce.AsSpan(4), counter);
