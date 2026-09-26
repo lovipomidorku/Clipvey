@@ -20,7 +20,7 @@ else
 fi
 
 # Сборка — один раз, функцией build из lib.sh.
-bash -c "source '$DIR/lib.sh'; build; FINISHED=1" || { echo "Сборка не удалась"; exit 1; }
+bash -c "source '$DIR/lib.sh'; build; FINISHED=1" || { echo "Сборка или предварительная проверка не прошла (см. выше)"; exit 1; }
 
 passed=()
 failed=()

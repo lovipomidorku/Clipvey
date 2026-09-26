@@ -150,7 +150,7 @@ func generate() -> [String: Any] {
     }
 
     return [
-        "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\ud83d\\ude00 в .NET) у реализаций разные.",
+        "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\uD83D\\uDE00 в .NET) у реализаций разные.",
         "keys": [
             "initiator_static": keyEntry(staticI),
             "responder_static": keyEntry(staticR),

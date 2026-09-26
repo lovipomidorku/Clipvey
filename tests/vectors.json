@@ -1,5 +1,5 @@
 {
-  "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\ud83d\\ude00 в .NET) у реализаций разные.",
+  "comment": "Общие проверочные данные протокола (docs/protocol.md). Байты — hex строчными. Проверяют: cd mac && swift run clipvey-checks; dotnet test windows/Clipvey.Tests. Сообщения сравниваются как объекты JSON: порядок ключей и экранирование (например, эмодзи как \\uD83D\\uDE00 в .NET) у реализаций разные.",
   "device_id": {
     "initiator": "ec2b4635da6e02fc8b8f6095a12ceb88",
     "responder": "a51edaffc182c417fd12315efd5c0ee4"
