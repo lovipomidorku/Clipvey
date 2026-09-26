@@ -52,32 +52,55 @@ final class AppModel {
     /// Код, который пользователь вводит в роли I.
     var codeInput = ""
     /// Устройство, для которого показан вопрос «Разорвать связь?».
-    var confirmUnpairID: String?
+    var confirmUnpairID: String? {
+        didSet { if confirmUnpairID != nil { renamingDeviceID = nil } }
+    }
+    /// Устройство, которому сейчас задают псевдоним, и набранный текст.
+    var renamingDeviceID: String? {
+        didSet { if renamingDeviceID != nil { confirmUnpairID = nil } }
+    }
+    var aliasInput = ""
+    /// Поле «Имя этого Mac» в настройках; пустое — имя компьютера.
+    var nameInput = ""
 
-    /// Последняя передача через буфер: когда и в какую сторону. Только в памяти, без содержимого.
+    /// Последняя передача через буфер: когда, что и в какую сторону. Только в памяти, без содержимого.
     struct LastSync {
         enum Direction {
             case received(from: String)
             case sent
         }
 
+        enum Kind {
+            case text
+            case image
+        }
+
         let date: Date
         let direction: Direction
+        let kind: Kind
     }
 
     private(set) var lastSync: LastSync?
 
-    /// «11:03 · от OFFICE-PC» или «11:05 · отправлено»; nil — с запуска ничего не передавалось.
+    /// Что передано последним; nil — с запуска ничего не передавалось.
+    var lastSyncKind: LastSync.Kind? { lastSync?.kind }
+
+    /// «11:03 · от OFFICE-PC», «11:05 · отправлено», «11:07 · картинка от OFFICE-PC» или «11:09 · картинка отправлена»;
+    /// nil — с запуска ничего не передавалось.
     var lastSyncText: String? {
         guard let lastSync else { return nil }
         let time = Calendar.current.isDateInToday(lastSync.date)
             ? lastSync.date.formatted(date: .omitted, time: .shortened)
             : lastSync.date.formatted(date: .abbreviated, time: .shortened)
-        switch lastSync.direction {
-        case .received(let from):
+        switch (lastSync.kind, lastSync.direction) {
+        case (.text, .received(let from)):
             return L("\(time) · от \(from)", "\(time) · from \(from)")
-        case .sent:
+        case (.text, .sent):
             return L("\(time) · отправлено", "\(time) · sent")
+        case (.image, .received(let from)):
+            return L("\(time) · картинка от \(from)", "\(time) · image from \(from)")
+        case (.image, .sent):
+            return L("\(time) · картинка отправлена", "\(time) · image sent")
         }
     }
 
@@ -117,11 +140,11 @@ final class AppModel {
         guard let node else { return }
         node.onClipReceived = { [weak self] text, from in
             self?.bridge.write(text)
-            self?.lastSync = LastSync(date: Date(), direction: .received(from: from))
+            self?.lastSync = LastSync(date: Date(), direction: .received(from: from), kind: .text)
         }
         node.onImageReceived = { [weak self] data, mime, from in
             self?.bridge.writeImage(data, mime: mime)
-            self?.lastSync = LastSync(date: Date(), direction: .received(from: from))
+            self?.lastSync = LastSync(date: Date(), direction: .received(from: from), kind: .image)
         }
         node.onConnectionsChanged = { [weak self] _ in self?.updateSleepGuard() }
         bridge.shouldRead = { [weak node] in node?.devices.contains(where: \.connected) ?? false }
@@ -132,7 +155,7 @@ final class AppModel {
         bridge.onCopyImage = { [weak self, weak node] data, mime in
             guard let node else { return }
             if node.sendImage(data, mime: mime) > 0 {
-                self?.lastSync = LastSync(date: Date(), direction: .sent)
+                self?.lastSync = LastSync(date: Date(), direction: .sent, kind: .image)
             }
         }
         bridge.onCopy = { [weak self, weak node] text in
@@ -141,7 +164,7 @@ final class AppModel {
             let hasRecipients = node.devices.contains { $0.connected && $0.enabled }
             node.broadcast(text)
             if hasRecipients {
-                self?.lastSync = LastSync(date: Date(), direction: .sent)
+                self?.lastSync = LastSync(date: Date(), direction: .sent, kind: .text)
             }
         }
         TestHooks.prepare(node)
@@ -160,6 +183,45 @@ final class AppModel {
             Settings.deviceName = normalized.isEmpty ? nil : normalized
         }
         node?.setName(normalized.isEmpty ? AppInfo.deviceName : normalized)
+    }
+
+    /// Заполнить поле «Имя этого Mac»: своё имя, если оно задано, иначе пусто (подсказкой видно имя компьютера).
+    /// Берётся из узла, а не из UserDefaults: в режиме проверки имя не сохраняется.
+    func loadNameInput() {
+        guard let node else { return }
+        nameInput = node.name == AppInfo.deviceName ? "" : node.name
+    }
+
+    /// Сохранить поле «Имя этого Mac», если оно изменилось.
+    func commitNameInput() {
+        guard let node else { return }
+        var normalized = ClipveyNode.normalizedName(nameInput)
+        if normalized == AppInfo.deviceName {
+            normalized = ""
+        }
+        let current = node.name == AppInfo.deviceName ? "" : node.name
+        nameInput = normalized
+        guard normalized != current else { return }
+        rename(normalized)
+    }
+
+    /// Открыть поле псевдонима у устройства (псевдоним хранится только на этом Mac).
+    func beginRename(_ device: ClipveyNode.DeviceStatus) {
+        aliasInput = device.alias ?? device.name
+        renamingDeviceID = device.id
+    }
+
+    /// Сохранить псевдоним. Пустой или совпадающий с именем устройства — сбросить.
+    func commitAlias(for device: ClipveyNode.DeviceStatus) {
+        let alias = ClipveyNode.normalizedName(aliasInput)
+        node?.setAlias(alias == device.name ? "" : alias, deviceID: device.id)
+        renamingDeviceID = nil
+    }
+
+    /// Вернуть имя, которое устройство сообщает само.
+    func resetAlias(for device: ClipveyNode.DeviceStatus) {
+        node?.setAlias("", deviceID: device.id)
+        renamingDeviceID = nil
     }
 
     /// «Передавать картинки».
