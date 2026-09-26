@@ -61,8 +61,8 @@ final class ClipveyNode {
     let identity: DeviceIdentity
     let name: String
 
-    /// Пришёл текст с другого устройства (переводы строк — \n).
-    @ObservationIgnored var onClipReceived: ((String) -> Void)?
+    /// Пришёл текст с другого устройства (переводы строк — \n) и имя устройства, от которого он пришёл.
+    @ObservationIgnored var onClipReceived: ((_ text: String, _ from: String) -> Void)?
     /// Изменилось число подключённых устройств.
     @ObservationIgnored var onConnectionsChanged: ((Int) -> Void)?
     /// Для самопроверки: события строками вида «CONNECTED имя».
@@ -172,7 +172,7 @@ final class ClipveyNode {
         }
         Log.clipboard.info("Получено от «\(session.peerName, privacy: .public)»: \(clip.text.count) символов")
         onEvent?("CLIP \(session.peerName) \(clip.text)")
-        onClipReceived?(clip.text)
+        onClipReceived?(clip.text, session.peerName)
         if clip.hops + 1 < Self.maxHops {
             send(ClipPayload(id: clip.id, origin: clip.origin, hops: clip.hops + 1, text: clip.text), except: session.peerID)
         }

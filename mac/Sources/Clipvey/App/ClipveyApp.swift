@@ -53,6 +53,33 @@ final class AppModel {
     /// Устройство, для которого показан вопрос «Разорвать связь?».
     var confirmUnpairID: String?
 
+    /// Последняя передача через буфер: когда и в какую сторону. Только в памяти, без содержимого.
+    struct LastSync {
+        enum Direction {
+            case received(from: String)
+            case sent
+        }
+
+        let date: Date
+        let direction: Direction
+    }
+
+    private(set) var lastSync: LastSync?
+
+    /// «11:03 · от OFFICE-PC» или «11:05 · отправлено»; nil — с запуска ничего не передавалось.
+    var lastSyncText: String? {
+        guard let lastSync else { return nil }
+        let time = Calendar.current.isDateInToday(lastSync.date)
+            ? lastSync.date.formatted(date: .omitted, time: .shortened)
+            : lastSync.date.formatted(date: .abbreviated, time: .shortened)
+        switch lastSync.direction {
+        case .received(let from):
+            return L("\(time) · от \(from)", "\(time) · from \(from)")
+        case .sent:
+            return L("\(time) · отправлено", "\(time) · sent")
+        }
+    }
+
     var keepAwake: Bool {
         didSet {
             Settings.keepAwake = keepAwake
@@ -82,10 +109,21 @@ final class AppModel {
 
     func start() {
         guard let node else { return }
-        node.onClipReceived = { [weak self] text in self?.bridge.write(text) }
+        node.onClipReceived = { [weak self] text, from in
+            self?.bridge.write(text)
+            self?.lastSync = LastSync(date: Date(), direction: .received(from: from))
+        }
         node.onConnectionsChanged = { [weak self] _ in self?.updateSleepGuard() }
         bridge.shouldRead = { [weak node] in node?.devices.contains(where: \.connected) ?? false }
-        bridge.onCopy = { [weak node] text in node?.broadcast(text) }
+        bridge.onCopy = { [weak self, weak node] text in
+            guard let node else { return }
+            // Узел шлёт только подключённым включённым устройствам; если их нет, отправки не было.
+            let hasRecipients = node.devices.contains { $0.connected && $0.enabled }
+            node.broadcast(text)
+            if hasRecipients {
+                self?.lastSync = LastSync(date: Date(), direction: .sent)
+            }
+        }
         TestHooks.prepare(node)
         node.start()
         bridge.start()
@@ -126,7 +164,8 @@ final class AppModel {
     /// Обновляет подсказку при каждом изменении того, из чего она складывается.
     private func observeTooltip() {
         tooltip = withObservationTracking {
-            statusSummary
+            guard let lastSyncText else { return statusSummary }
+            return "\(statusSummary)\n\(L("Последняя синхронизация", "Last sync")): \(lastSyncText)"
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeTooltip() }
         }
@@ -136,7 +175,8 @@ final class AppModel {
 
     /// Кнопка значка появляется не сразу после запуска: несколько раз пробуем ещё.
     private func applyTooltip() {
-        if StatusItemTooltip.set(tooltip) {            return
+        if StatusItemTooltip.set(tooltip) {
+            return
         }
         tooltipAttempts += 1
         guard tooltipAttempts <= 10 else {

@@ -76,6 +76,15 @@ struct MainView: View {
         if let node = model.node {
             VStack(alignment: .leading, spacing: 12) {
                 DevicesSection(node: node)
+                if let lastSync = model.lastSyncText {
+                    Label {
+                        Text("\(L("Последняя синхронизация", "Last sync")): \(lastSync)")
+                    } icon: {
+                        Image(systemName: "arrow.left.arrow.right")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 PairingSection(node: node)
                 if model.bridge.needsAccessPermission && node.devices.contains(where: \.enabled) {
                     AccessHint()
