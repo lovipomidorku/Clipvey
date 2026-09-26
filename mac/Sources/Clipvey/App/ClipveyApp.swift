@@ -14,10 +14,12 @@ struct ClipveyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra(AppInfo.displayName, systemImage: "doc.on.clipboard") {
+        MenuBarExtra {
             RootView()
                 .environment(appDelegate.model)
                 .environment(LaunchAtLogin.shared)
+        } label: {
+            MenuBarLabel(model: appDelegate.model)
         }
         .menuBarExtraStyle(.window)
     }
@@ -88,6 +90,63 @@ final class AppModel {
         node.start()
         bridge.start()
         TestHooks.run(node)
+        observeTooltip()
+    }
+
+    // MARK: - Значок в строке меню
+
+    var syncState: SyncState {
+        guard let devices = node?.devices, !devices.isEmpty else { return .idle }
+        if devices.contains(where: \.connected) { return .connected }
+        if devices.allSatisfy({ !$0.enabled }) { return .disabled }
+        return .idle
+    }
+
+    /// Состояние одной строкой: подсказка при наведении на значок.
+    var statusSummary: String {
+        let devices = node?.devices ?? []
+        let connected = devices.filter(\.connected).count
+        let state: String
+        switch syncState {
+        case .connected:
+            state = L("подключено \(connected) из \(devices.count)", "\(connected) of \(devices.count) connected")
+        case .disabled:
+            state = L("синхронизация выключена", "sync is off")
+        case .idle:
+            state = devices.isEmpty
+                ? L("нет связанных устройств", "no paired devices")
+                : L("нет подключений", "not connected")
+        }
+        return "\(AppInfo.displayName) — \(state)"
+    }
+
+    @ObservationIgnored private var tooltip = ""
+    @ObservationIgnored private var tooltipAttempts = 0
+
+    /// Обновляет подсказку при каждом изменении того, из чего она складывается.
+    private func observeTooltip() {
+        tooltip = withObservationTracking {
+            statusSummary
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeTooltip() }
+        }
+        tooltipAttempts = 0
+        applyTooltip()
+    }
+
+    /// Кнопка значка появляется не сразу после запуска: несколько раз пробуем ещё.
+    private func applyTooltip() {
+        if StatusItemTooltip.set(tooltip) {            return
+        }
+        tooltipAttempts += 1
+        guard tooltipAttempts <= 10 else {
+            Log.app.info("Подсказка значка: кнопка в строке меню не найдена")
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            self?.applyTooltip()
+        }
     }
 
     private func updateSleepGuard() {
