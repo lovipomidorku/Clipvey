@@ -458,10 +458,17 @@ internal sealed partial class PanelWindow : Window
 
     private static DeviceItem ItemOf(object sender) => (DeviceItem)((FrameworkElement)sender).DataContext;
 
+    /// Переключатели — по Checked/Unchecked, а не Click: так срабатывает и переключение с клавиатуры и через
+    /// UI Automation (экранный диктор). Эти же события вызывает и сама панель, когда выставляет состояние:
+    /// в RefreshContent (под _updating) и привязкой IsChecked строки устройства (при её создании и обновлении).
+    /// Поэтому действие — только если новое значение отличается от настоящего состояния.
     private void OnDeviceToggle(object sender, RoutedEventArgs e)
     {
-        var toggle = (ToggleButton)sender;
-        Node.SetEnabled(ItemOf(sender).Id, toggle.IsChecked == true);
+        if (_updating || sender is not ToggleButton { DataContext: DeviceItem item } toggle)
+            return;
+        var enabled = toggle.IsChecked == true;
+        if (Node.Devices.FirstOrDefault(device => device.DeviceId == item.Id) is { } device && device.Enabled != enabled)
+            Node.SetEnabled(item.Id, enabled);
     }
 
     private void OnDeviceMore(object sender, RoutedEventArgs e)
@@ -803,17 +810,40 @@ internal sealed partial class PanelWindow : Window
         LanguageBox.SelectedItem = LanguageBox.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (AppLanguage)item.Tag == Setting);
     }
 
-    private void OnAutostartClick(object sender, RoutedEventArgs e) =>
-        AutostartSwitch.IsChecked = Autostart.SafeSet(AutostartSwitch.IsChecked == true);
+    /// По Checked/Unchecked (см. OnDeviceToggle). Если автозапуск изменить не удалось (причина — в журнале),
+    /// переключатель возвращается в настоящее состояние — под _updating, чтобы это не сочлось действием.
+    private void OnAutostartChanged(object sender, RoutedEventArgs e)
+    {
+        var wanted = AutostartSwitch.IsChecked == true;
+        if (_updating || wanted == Autostart.SafeIsEnabled())
+            return;
+        var actual = Autostart.SafeSet(wanted);
+        if (actual == wanted)
+            return;
+        var updating = _updating;
+        _updating = true;
+        try
+        {
+            AutostartSwitch.IsChecked = actual;
+        }
+        finally
+        {
+            _updating = updating;
+        }
+    }
 
-    private void OnImagesClick(object sender, RoutedEventArgs e) => _app.SetImagesEnabled(ImagesSwitch.IsChecked == true);
+    private void OnImagesChanged(object sender, RoutedEventArgs e)
+    {
+        var enabled = ImagesSwitch.IsChecked == true;
+        if (!_updating && enabled != Node.ImagesEnabled)
+            _app.SetImagesEnabled(enabled);
+    }
 
-    /// По Checked/Unchecked, а не Click: так срабатывает и переключение через UI Automation (экранный диктор).
-    /// Программная установка в RefreshSettings идёт под _updating и не считается действием пользователя.
     private void OnFilesChanged(object sender, RoutedEventArgs e)
     {
-        if (!_updating)
-            _app.SetFilesEnabled(FilesSwitch.IsChecked == true);
+        var enabled = FilesSwitch.IsChecked == true;
+        if (!_updating && enabled != Node.FilesEnabled)
+            _app.SetFilesEnabled(enabled);
     }
 
     private void OnLanguageSelected(object sender, SelectionChangedEventArgs e)
@@ -926,7 +956,12 @@ internal sealed partial class PanelWindow : Window
 
     private void OnDismissUpdate(object sender, RoutedEventArgs e) => Updater.Dismiss();
 
-    private void OnAutoUpdateClick(object sender, RoutedEventArgs e) => Updater.ChecksAutomatically = AutoUpdateSwitch.IsChecked == true;
+    private void OnAutoUpdateChanged(object sender, RoutedEventArgs e)
+    {
+        var enabled = AutoUpdateSwitch.IsChecked == true;
+        if (!_updating && enabled != Updater.ChecksAutomatically)
+            Updater.ChecksAutomatically = enabled;
+    }
 
     private void OnCheckUpdates(object sender, RoutedEventArgs e) => _ = Updater.CheckAsync(manual: true);
 

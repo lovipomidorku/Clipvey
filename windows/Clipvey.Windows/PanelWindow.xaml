@@ -130,7 +130,7 @@
                                                       IsChecked="{Binding Enabled, Mode=OneWay}"
                                                       AutomationProperties.AutomationId="{Binding ToggleId}"
                                                       AutomationProperties.Name="{Binding ToggleName}"
-                                                      Click="OnDeviceToggle" />
+                                                      Checked="OnDeviceToggle" Unchecked="OnDeviceToggle" />
                                         <Button Grid.Column="3" Style="{StaticResource SubtleButton}"
                                                 AutomationProperties.AutomationId="{Binding MoreId}"
                                                 AutomationProperties.Name="{Binding MoreName}"
@@ -309,7 +309,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock x:Name="ImagesText" Style="{StaticResource Body}" VerticalAlignment="Center" />
                             <ToggleButton x:Name="ImagesSwitch" Grid.Column="1" Style="{StaticResource Switch}" Margin="12,0,0,0"
-                                          AutomationProperties.AutomationId="images" Click="OnImagesClick" />
+                                          AutomationProperties.AutomationId="images" Checked="OnImagesChanged" Unchecked="OnImagesChanged" />
                         </Grid>
 
                         <Grid Margin="0,14,0,0">
@@ -330,7 +330,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock x:Name="AutostartText" Style="{StaticResource Body}" VerticalAlignment="Center" />
                             <ToggleButton x:Name="AutostartSwitch" Grid.Column="1" Style="{StaticResource Switch}" Margin="12,0,0,0"
-                                          AutomationProperties.AutomationId="autostart" Click="OnAutostartClick" />
+                                          AutomationProperties.AutomationId="autostart" Checked="OnAutostartChanged" Unchecked="OnAutostartChanged" />
                         </Grid>
 
 
@@ -357,7 +357,7 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock x:Name="AutoUpdateText" Style="{StaticResource Body}" VerticalAlignment="Center" />
                             <ToggleButton x:Name="AutoUpdateSwitch" Grid.Column="1" Style="{StaticResource Switch}" Margin="12,0,0,0"
-                                          AutomationProperties.AutomationId="update-auto" Click="OnAutoUpdateClick" />
+                                          AutomationProperties.AutomationId="update-auto" Checked="OnAutoUpdateChanged" Unchecked="OnAutoUpdateChanged" />
                         </Grid>
                         <Grid Margin="0,12,0,0">
                             <Grid.ColumnDefinitions>
