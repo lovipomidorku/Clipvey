@@ -7,6 +7,12 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // Режим установщика обновления: заменить exe и запустить его, без интерфейса и мьютекса.
+        if (args.Contains(UpdaterOptions.FinishUpdateFlag))
+        {
+            Updater.FinishUpdate(args);
+            return;
+        }
         UpdaterOptions.Load(args);
         using var mutex = new Mutex(initiallyOwned: true, @"Local\Clipvey", out var isFirstInstance);
         // Запуск после обновления: старая версия ещё завершается и держит мьютекс.

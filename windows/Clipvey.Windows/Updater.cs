@@ -11,10 +11,12 @@ namespace Clipvey.Windows;
 ///   --update-now             сразу проверить и, если есть новая версия, установить без вопроса
 ///   --update-check-delay N   первая автоматическая проверка через N секунд вместо 60
 /// --after-update ставит сама программа, запуская новую версию: подождать выхода старой.
+/// --finish-update EXE PID — режим установщика: так запускается скачанный Clipvey.exe.new (см. Updater.FinishUpdate).
 internal sealed record UpdaterOptions(
     bool Test, Uri? Url, string? PublicKey, bool CheckNow, TimeSpan? FirstDelay, bool AfterUpdate, string[] Arguments)
 {
     public const string AfterUpdateFlag = "--after-update";
+    public const string FinishUpdateFlag = "--finish-update";
 
     public static UpdaterOptions Current { get; private set; } = Parse([]);
 
@@ -277,13 +279,12 @@ internal sealed class Updater : IDisposable
             Changed?.Invoke();
             try
             {
-                Replace(exe, downloaded);
-                StartNew(exe);
+                StartInstaller(exe, downloaded);
             }
             catch (Exception e)
             {
                 Phase = UpdatePhase.Idle;
-                Fail(UpdateNotice.InstallFailed, $"замена exe ({exe}): {e.GetType().Name}: {e.Message}");
+                Fail(UpdateNotice.InstallFailed, $"запуск установщика ({exe}): {e.GetType().Name}: {e.Message}");
                 return;
             }
         }
@@ -291,7 +292,7 @@ internal sealed class Updater : IDisposable
         {
             TryDeleteDirectory(work);
         }
-        Log.Write($"Обновления: установлена {release.Version}, новая версия запущена — завершаюсь");
+        Log.Write($"Обновления: запущен установщик {release.Version} — завершаюсь, он заменит exe");
         _quit();
     }
 
@@ -302,43 +303,77 @@ internal sealed class Updater : IDisposable
         Changed?.Invoke();
     }
 
-    /// Работающий exe переименовывается (Windows это разрешает), новый встаёт на его место.
-    private static void Replace(string exe, string downloaded)
+    /// Работающий exe не трогаем: Clipvey.exe — однофайловая сборка, .NET дочитывает из него библиотеки
+    /// по мере надобности. Если его переименовать, следующая же загрузка библиотеки (например, для запуска
+    /// процесса или записи в буфер) падает с FileNotFoundException. Поэтому новая версия кладётся рядом
+    /// как Clipvey.exe.new и запускается в режиме установщика, а эта программа сразу завершается.
+    private void StartInstaller(string exe, string downloaded)
     {
         var staged = exe + ".new";
-        var old = exe + ".old";
-        // Сначала в папку exe: тогда последние переименования — на одном диске.
         File.Move(downloaded, staged, overwrite: true);
-        if (File.Exists(old))
-            File.Delete(old);
-        File.Move(exe, old);
-        try
-        {
-            File.Move(staged, exe);
-        }
-        catch
-        {
-            File.Move(old, exe);
-            throw;
-        }
-    }
-
-    /// Запустить новую версию. Не запустилась — вернуть старую на место.
-    private void StartNew(string exe)
-    {
-        var start = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! };
+        var start = new ProcessStartInfo(staged) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! };
+        start.ArgumentList.Add(UpdaterOptions.FinishUpdateFlag);
+        start.ArgumentList.Add(exe);
+        start.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         foreach (var argument in _options.RelaunchArguments)
             start.ArgumentList.Add(argument);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("процесс не создан");
+    }
+
+    /// Режим установщика (запущен как Clipvey.exe.new): дождаться выхода старой версии, скопировать себя
+    /// на её место и запустить. Не вышло — запустить старую, чтобы программа не пропала. Интерфейса нет.
+    public static void FinishUpdate(string[] args)
+    {
+        var index = Array.IndexOf(args, UpdaterOptions.FinishUpdateFlag);
+        if (index < 0 || index + 2 >= args.Length || Environment.ProcessPath is not { } self)
+            return;
+        var target = args[index + 1];
+        var relaunch = args.Skip(index + 3).ToList();
+        FileLog.Start();
         try
         {
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("процесс не создан");
+            if (int.TryParse(args[index + 2], out var pid))
+            {
+                try
+                {
+                    using var old = Process.GetProcessById(pid);
+                    if (!old.WaitForExit(TimeSpan.FromSeconds(30)))
+                        Log.Write("Установщик: старая версия не завершилась за 30 с");
+                }
+                catch (ArgumentException)
+                {
+                    // Уже завершилась.
+                }
+            }
+            // Антивирус может ещё держать только что скачанный или старый файл — несколько попыток.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Copy(self, target, overwrite: true);
+                    break;
+                }
+                catch (Exception e) when ((e is IOException or UnauthorizedAccessException) && attempt < 40)
+                {
+                    Thread.Sleep(500);
+                }
+            }
+            Log.Write($"Установщик: {Path.GetFileName(target)} заменён новой версией");
         }
-        catch
+        catch (Exception e)
         {
-            var old = exe + ".old";
-            File.Move(exe, exe + ".new", overwrite: true);
-            File.Move(old, exe);
-            throw;
+            Log.Write($"Установщик: не удалось заменить {target}: {e.GetType().Name}: {e.Message} — запускаю прежнюю версию");
+        }
+        try
+        {
+            var start = new ProcessStartInfo(target) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(target)! };
+            foreach (var argument in relaunch)
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start);
+        }
+        catch (Exception e)
+        {
+            Log.Write($"Установщик: не удалось запустить {target}: {e.GetType().Name}: {e.Message}");
         }
     }
 
