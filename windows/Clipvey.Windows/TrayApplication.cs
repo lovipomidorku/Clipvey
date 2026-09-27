@@ -161,6 +161,9 @@ internal sealed class TrayApplication
     {
         if (_menu is { IsOpen: true })
             return;
+        // Как у всплывающих панелей Windows: правый клик по значку закрывает панель. Иначе панель и меню
+        // спорят за активное окно, и меню сразу закрывается.
+        _panel?.HidePanel();
         var devices = _node.Devices;
         var connected = devices.Count(device => device.Connected);
         var status = devices.Count == 0

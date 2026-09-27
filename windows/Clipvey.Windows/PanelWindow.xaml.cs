@@ -773,8 +773,6 @@ internal sealed partial class PanelWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(NameBox, NameTitle.Text);
         if (!_nameDirty)
             SetNameText(Node.Name);
-        NameHint.Text = L($"Enter — сохранить. Пустое поле — имя компьютера в Windows ({Environment.MachineName}).",
-            $"Press Enter to save. Leave empty to use the Windows computer name ({Environment.MachineName}).");
 
         AutostartText.Text = L("Запускать при входе в Windows", "Start with Windows");
         System.Windows.Automation.AutomationProperties.SetName(AutostartSwitch, AutostartText.Text);
