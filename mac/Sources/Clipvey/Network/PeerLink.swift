@@ -1,55 +1,36 @@
 import Foundation
 import Network
 
-/// Соединение с другим устройством: кадры `u32 длина + нагрузка` поверх NWConnection,
-/// после рукопожатия — шифрование. Шифрование кадра и постановка его в очередь NWConnection
+/// Соединение с другим устройством: кадры `u32 длина + нагрузка` поверх LinkTransport (исходящее NWConnection
+/// или принятый сокет), после рукопожатия — шифрование. Шифрование кадра и постановка его в очередь транспорта
 /// идут без точек приостановки, поэтому порядок кадров на проводе совпадает с порядком счётчиков.
 ///
-/// Куски файлов (и file_end, file_error, pong) уходят «окном»: кадр ставится в очередь NWConnection сразу,
-/// а ждать приходится, только когда там уже больше fileSendWindow байт, которые стек ещё не забрал. Если ждать
-/// каждый кусок, пустеет труба: на соединении, которое Mac принял (его начал ПК), отдача шла втрое медленнее сети.
+/// Куски файлов (и file_end, file_error, pong) уходят «окном»: кадр ставится в очередь транспорта сразу,
+/// а ждать приходится, только когда там уже больше fileSendWindow байт, которые он ещё не забрал: следующий
+/// кусок читается с диска, пока предыдущие в пути.
 actor PeerLink {
     static let maxFrameBytes = 4 * 1024 * 1024
     /// Сколько байт кусков файлов держать в очереди отправки. Больше — дольше ждут своей очереди clip и ping
     /// между кусками; меньше — на медленной сети между кусками снова бывает пусто.
     static let fileSendWindow = 4 * 1024 * 1024
-    private static let queue = DispatchQueue(label: "io.github.lovipomidorku.clipvey.network")
 
-    nonisolated let connection: NWConnection
+    nonisolated let transport: LinkTransport
     private var codec: SecureCodec?
     private nonisolated let window = SendWindow(limit: fileSendWindow)
 
+    init(transport: LinkTransport) {
+        self.transport = transport
+    }
+
+    /// Исходящее соединение.
     init(connection: NWConnection) {
-        self.connection = connection
+        self.init(transport: NWTransport(connection))
     }
 
     /// Дождаться готовности соединения (исходящее при этом подключается).
     /// Если за timeout не вышло, соединение отменяется.
     func start(timeout: TimeInterval) async throws {
-        let connection = self.connection
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let once = ResumeOnce(continuation)
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    once.resume(with: .success(()))
-                case .failed(let error), .waiting(let error):
-                    if once.resume(with: .failure(ClipveyError.connectionFailed(error.localizedDescription))) {
-                        connection.cancel()
-                    }
-                case .cancelled:
-                    once.resume(with: .failure(ClipveyError.connectionFailed("соединение закрыто")))
-                default:
-                    break
-                }
-            }
-            connection.start(queue: Self.queue)
-            Self.queue.asyncAfter(deadline: .now() + timeout) {
-                if once.resume(with: .failure(ClipveyError.connectionFailed("нет ответа"))) {
-                    connection.cancel()
-                }
-            }
-        }
+        try await transport.start(timeout: timeout)
     }
 
     func enableEncryption(_ codec: SecureCodec) {
@@ -105,23 +86,15 @@ actor PeerLink {
         return try WireMessage.decodeSession(plaintext)
     }
 
-    /// Закрыть соединение. Ждущие окна отправки получают ошибку сразу, не полагаясь на завершения NWConnection.
+    /// Закрыть соединение. Ждущие окна отправки получают ошибку сразу, не полагаясь на завершения транспорта.
     nonisolated func cancel() {
         window.fail(ClipveyError.connectionFailed("соединение закрыто"))
-        connection.cancel()
+        transport.cancel()
     }
 
     /// Адрес другой стороны (для запоминания последнего удачного адреса).
     nonisolated var remoteEndpoint: (host: String, port: Int)? {
-        guard case .hostPort(let host, let port) = connection.currentPath?.remoteEndpoint else { return nil }
-        let hostString: String
-        switch host {
-        case .ipv4(let address): hostString = "\(address)"
-        case .ipv6(let address): hostString = "\(address)"
-        case .name(let name, _): hostString = name
-        @unknown default: return nil
-        }
-        return (hostString.components(separatedBy: "%").first ?? hostString, Int(port.rawValue))
+        transport.remoteEndpoint
     }
 
     // MARK: - Кадры
@@ -146,43 +119,31 @@ actor PeerLink {
         return (header, nil)
     }
 
-    /// Заголовок и нагрузка ставятся в очередь NWConnection без точки приостановки между ними; ждёт, пока стек
-    /// их заберёт (contentProcessed).
+    /// Заголовок и нагрузка ставятся в очередь транспорта без точки приостановки между ними; ждёт, пока
+    /// транспорт их заберёт.
     private func sendFrame(_ payload: Data) async throws {
         let (head, body) = try Self.frame(payload)
-        let connection = self.connection
+        let transport = self.transport
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let completion = NWConnection.SendCompletion.contentProcessed { error in
+            transport.send(head: head, body: body) { error in
                 if let error {
-                    continuation.resume(throwing: ClipveyError.connectionFailed(error.localizedDescription))
+                    continuation.resume(throwing: error)
                 } else {
                     continuation.resume()
                 }
             }
-            if let body {
-                connection.send(content: head, completion: .contentProcessed { _ in })
-                connection.send(content: body, completion: completion)
-            } else {
-                connection.send(content: head, completion: completion)
-            }
         }
     }
 
-    /// Поставить кадр в очередь NWConnection, не дожидаясь отправки: байты считаются в окне, пока стек их
+    /// Поставить кадр в очередь транспорта, не дожидаясь отправки: байты считаются в окне, пока транспорт их
     /// не заберёт. Ошибка прежней отправки (или закрытое соединение) — исключение.
     private func enqueue(_ payload: Data) throws {
         let (head, body) = try Self.frame(payload)
         let bytes = head.count + (body?.count ?? 0)
         try window.add(bytes)
         let window = self.window
-        let completion = NWConnection.SendCompletion.contentProcessed { error in
-            window.done(bytes, error: error.map { ClipveyError.connectionFailed($0.localizedDescription) })
-        }
-        if let body {
-            connection.send(content: head, completion: .contentProcessed { _ in })
-            connection.send(content: body, completion: completion)
-        } else {
-            connection.send(content: head, completion: completion)
+        transport.send(head: head, body: body) { error in
+            window.done(bytes, error: error)
         }
     }
 
@@ -209,22 +170,8 @@ actor PeerLink {
         return result
     }
 
-    /// Не больше count байт; NWConnection отдаёт их, когда придут все (или соединение закроется).
     private func receiveChunk(_ count: Int) async throws -> Data {
-        let connection = self.connection
-        return try await withCheckedThrowingContinuation { continuation in
-            connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, isComplete, error in
-                if let data, !data.isEmpty {
-                    continuation.resume(returning: data)
-                } else if let error {
-                    continuation.resume(throwing: ClipveyError.connectionFailed(error.localizedDescription))
-                } else if isComplete {
-                    continuation.resume(throwing: ClipveyError.connectionFailed("соединение закрыто"))
-                } else {
-                    continuation.resume(returning: Data())
-                }
-            }
-        }
+        try await transport.receive(upTo: count)
     }
 }
 

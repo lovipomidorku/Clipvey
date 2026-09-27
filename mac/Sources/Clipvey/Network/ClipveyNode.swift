@@ -113,8 +113,8 @@ final class ClipveyNode {
     @ObservationIgnored var onEvent: ((String) -> Void)?
 
     @ObservationIgnored let store: DeviceStore
-    @ObservationIgnored private var listener: NWListener?
-    @ObservationIgnored private var listenerUsesDefaultPort = true
+    @ObservationIgnored private var listener: SocketListener?
+    @ObservationIgnored private lazy var advertiser = BonjourAdvertiser(type: Self.serviceType)
     @ObservationIgnored private var browser: NWBrowser?
     @ObservationIgnored var sessions: [String: ActiveSession] = [:]
     /// Свои описания файлов: id → описание и локальные файлы (NodeFiles.swift).
@@ -161,7 +161,7 @@ final class ClipveyNode {
         for device in store.devices {
             disconnectedSince[device.deviceID] = Date()
         }
-        startListener(port: NWEndpoint.Port(rawValue: Self.defaultPort) ?? .any)
+        startListener()
         startBrowser()
         maintenance = Task { [weak self] in
             while !Task.isCancelled {
@@ -222,8 +222,8 @@ final class ClipveyNode {
         guard !normalized.isEmpty, normalized != name else { return }
         Log.network.notice("Имя устройства: «\(self.name, privacy: .public)» → «\(normalized, privacy: .public)»")
         name = normalized
-        // Повторное присваивание service обновляет и имя экземпляра, и TXT.
-        listener?.service = advertisedService()
+        // Новое имя экземпляра Bonjour и TXT.
+        advertise()
         sendInfoToAll()
     }
 
@@ -531,54 +531,44 @@ final class ClipveyNode {
 
     // MARK: - Объявление и поиск
 
-    private func startListener(port: NWEndpoint.Port) {
+    /// Порт 48620, а если он занят — любой свободный. Принятые соединения — сокеты ядра (SocketTransport):
+    /// через NWListener соединение, начатое другой стороной, отдавало файлы втрое медленнее сети (см. LinkTransport).
+    private func startListener() {
+        let accept: @MainActor (Int32) -> Void = { [weak self] descriptor in
+            guard let self else {
+                close(descriptor)
+                return
+            }
+            self.accept(descriptor)
+        }
         do {
-            // Принятые соединения получают параметры слушателя, в том числе TCP_NODELAY.
-            let parameters = Self.tcpParameters()
-            parameters.allowLocalEndpointReuse = true
-            let listener = try NWListener(using: parameters, on: port)
-            listener.service = advertisedService()
-            listener.newConnectionHandler = { [weak self] connection in
-                MainActor.assumeIsolated { self?.accept(connection) }
-            }
-            listener.stateUpdateHandler = { [weak self] state in
-                MainActor.assumeIsolated { self?.listenerStateChanged(state) }
-            }
-            listener.start(queue: .main)
-            self.listener = listener
+            listener = try SocketListener(port: Self.defaultPort, onAccept: accept)
         } catch {
-            Log.network.error("Не удалось открыть порт: \(error.localizedDescription, privacy: .public)")
-            if port != .any {
-                listenerUsesDefaultPort = false
-                startListener(port: .any)
+            Log.network.error("Порт \(Self.defaultPort) занят (\(error.localizedDescription, privacy: .public)), беру свободный")
+            do {
+                listener = try SocketListener(port: 0, onAccept: accept)
+            } catch {
+                Log.network.error("Не удалось открыть порт: \(error.localizedDescription, privacy: .public)")
+                return
             }
+        }
+        port = listener?.port
+        advertise()
+        Log.network.notice("«\(self.name, privacy: .public)» (\(self.identity.deviceID, privacy: .public)) слушает порт \(self.port ?? 0)")
+        // Как состояние .ready у слушателя — после start(), на следующем проходе главного цикла.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.onEvent?("READY \(self.name) id=\(self.identity.deviceID) port=\(self.port ?? 0)")
         }
     }
 
-    private func listenerStateChanged(_ state: NWListener.State) {
-        switch state {
-        case .ready:
-            port = listener?.port?.rawValue
-            Log.network.notice("«\(self.name, privacy: .public)» (\(self.identity.deviceID, privacy: .public)) слушает порт \(self.port ?? 0)")
-            onEvent?("READY \(name) id=\(identity.deviceID) port=\(port ?? 0)")
-        case .failed(let error):
-            Log.network.error("Слушатель остановлен: \(error.localizedDescription, privacy: .public)")
-            listener?.cancel()
-            listener = nil
-            if listenerUsesDefaultPort {
-                listenerUsesDefaultPort = false
-                startListener(port: .any)
-            }
-        default:
-            break
-        }
-    }
-
-    private func advertisedService() -> NWListener.Service {
+    /// Объявить себя в Bonjour: имя, порт, TXT (id, v, pair, os, form). Повторный вызов обновляет имя и TXT.
+    private func advertise() {
+        guard let port else { return }
         var txt = ["id": identity.deviceID, "v": "1", "pair": isPairingMode ? "1" : "0"]
         if let os = deviceType.os { txt["os"] = os }
         if let form = deviceType.form { txt["form"] = form }
-        return NWListener.Service(name: name, type: Self.serviceType, domain: nil, txtRecord: NWTXTRecord(txt))
+        advertiser.advertise(name: name, port: port, txt: txt)
     }
 
     private func startBrowser() {
@@ -629,8 +619,8 @@ final class ClipveyNode {
 
     // MARK: - Входящие соединения
 
-    private func accept(_ connection: NWConnection) {
-        let link = PeerLink(connection: connection)
+    private func accept(_ descriptor: Int32) {
+        let link = PeerLink(transport: SocketTransport(descriptor: descriptor))
         Task { await handleIncoming(link) }
     }
 
@@ -971,7 +961,7 @@ final class ClipveyNode {
         pairingDeadline = Date().addingTimeInterval(Self.pairingDuration)
         isPairingMode = true
         pairingResult = nil
-        listener?.service = advertisedService()
+        advertise()
         updateCandidates()
         Log.network.notice("Режим связывания открыт")
         onEvent?("PAIRING_MODE")
@@ -986,7 +976,7 @@ final class ClipveyNode {
             cancelIncoming()
             cancelOutgoing()
         }
-        listener?.service = advertisedService()
+        advertise()
         updateCandidates()
         Log.network.notice("Режим связывания закрыт")
     }
