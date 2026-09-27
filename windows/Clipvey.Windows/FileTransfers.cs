@@ -152,7 +152,8 @@ internal sealed class FileTransfers
         Log.Write($"Файлы {offer.Id} от «{received.DeviceName}»: {offer.Items.Count} элементов, {offer.Total} байт — скачиваются в фоне");
         try
         {
-            var paths = await Task.Run(() => DownloadAsync(received, target, download.Cancel.Token));
+            // Смену сеанса и короткий обрыв посреди скачивания переживает узел (продолжает по новому сеансу).
+            var paths = await Task.Run(() => _node.DownloadFilesAsync(offer, received.DeviceId, target, null, download.Cancel.Token));
             if (!ReferenceEquals(_download, download))
             {
                 Log.Write($"Файлы {offer.Id} скачаны, но в буфере уже новее — не записаны");
@@ -175,24 +176,6 @@ internal sealed class FileTransfers
         finally
         {
             download.Cancel.Dispose();
-        }
-    }
-
-    /// Скачать; если сеанс сменился (оба устройства подключились одновременно) или коротко оборвался — заново,
-    /// по новому сеансу (не больше двух повторов).
-    private async Task<IReadOnlyList<string>> DownloadAsync(FileOfferReceived received, string target, CancellationToken ct)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return await _node.DownloadFilesAsync(received.Offer, received.DeviceId, target, null, ct);
-            }
-            catch (FileTransferException e) when (e.Failure == FileTransferFailure.DeviceUnavailable && attempt < 3
-                && Sessions.WaitFor(_node, received.DeviceId, ct))
-            {
-                Log.Write($"Файлы {received.Offer.Id}: сеанс сменился — скачиваю заново");
-            }
         }
     }
 

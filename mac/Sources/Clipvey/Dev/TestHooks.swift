@@ -35,7 +35,8 @@ import Network
 ///   --toast-demo           показать все виды окошка без сети (снимки — в --toast-shots) и выйти
 ///   --appearance dark|light  оформление программы (для снимков)
 /// Узел печатает также «INFO имя os=… form=… caps=…», «RENAMED старое новое», «IMAGE от размер sha256hex»,
-/// «FILE_OFFER от id элементов байт»; сценарий файлов — «FILES_SENT получателей id элементов байт», «FILES_REFUSED код»,
+/// «FILE_OFFER от id элементов байт», «FILES_RESUMED id получено» (скачивание продолжено по новому сеансу);
+/// сценарий файлов — «FILES_SENT получателей id элементов байт», «FILES_REFUSED код»,
 /// «FILES_DONE id файлов байт мс», «FILES_FAILED id код». Файлы через буфер: «FILES_SENT …», «FILES_REFUSED код»,
 /// «FILES_READY id элементов pasteboard|saved» (скачано; положено в буфер или нет — буфер уже сменился),
 /// «FILES_FAILED id код»; окошко — «TOAST вид подробности» (offer id, progress id, done id pasteboard|saved,

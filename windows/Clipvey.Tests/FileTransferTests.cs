@@ -15,7 +15,8 @@ public sealed class NodePair : IAsyncDisposable
 
     public string Files => Path.Combine(Root, "files");
 
-    public static async Task<NodePair> StartAsync()
+    /// configure — до запуска узлов (например, настройки для проверок).
+    public static async Task<NodePair> StartAsync(Action<NodePair>? configure = null)
     {
         if (Environment.GetEnvironmentVariable("CLIPVEY_TEST_LOG") is { } logFile)
         {
@@ -45,6 +46,7 @@ public sealed class NodePair : IAsyncDisposable
         pair._identities.Add(source);
         pair._identities.Add(receiver);
         Directory.CreateDirectory(pair.Files);
+        configure?.Invoke(pair);
         pair.Source.Start();
         pair.Receiver.Start();
         for (var i = 0; i < 200 && !(Connected(pair.Source) && Connected(pair.Receiver)); i++)
@@ -67,6 +69,11 @@ public sealed class NodePair : IAsyncDisposable
     }
 
     public string SourceId => Source.DeviceId;
+
+    /// Узел с меньшим deviceId: он подключается первым, и при двух сеансах остаётся тот, который начал он.
+    public ClipveyNode Smaller => string.CompareOrdinal(Source.DeviceId, Receiver.DeviceId) < 0 ? Source : Receiver;
+
+    public ClipveyNode Larger => ReferenceEquals(Smaller, Source) ? Receiver : Source;
 
     /// Отправить описание и дождаться его у получателя.
     public async Task<FileOffer> OfferAsync(params string[] paths)
@@ -273,23 +280,120 @@ public class FileTransferTests(NodePairFixture fixture) : IClassFixture<NodePair
     }
 }
 
-/// Обрыв сеанса: ожидающий поток и скачивание получают DeviceUnavailable.
+/// Сеанс закрылся посреди передачи: получатель ждёт новый сеанс и продолжает с того же места; нет сеанса —
+/// DeviceUnavailable. Каждая проверка — со своей парой узлов.
 public class FileTransferSessionLossTests
 {
+    private const int MiB = 1024 * 1024;
+
+    /// Дождаться, что текущий сеанс получателя с источником — не before.
+    private static bool WaitSessionChanged(NodePair pair, object? before) =>
+        SpinWait.SpinUntil(() => pair.Receiver.SessionForTest(pair.SourceId) is { } current && !ReferenceEquals(current, before),
+            TimeSpan.FromSeconds(20));
+
     [Fact]
-    public async Task StreamFailsWhenSourceGoesAway()
+    public async Task DownloadContinuesAfterSessionReplaced()
+    {
+        // Сеанс начинает больший deviceId (меньший сам не подключается). Посреди скачивания меньший подключается ещё
+        // раз, как при одновременном подключении: обе стороны оставляют новый сеанс, прежний закрывается.
+        await using var pair = await NodePair.StartAsync(p => p.Smaller.ConnectsAutomatically = false);
+        var data = new[]
+        {
+            pair.WriteRandom("замена/1.bin", 40 * MiB + 7),
+            pair.WriteRandom("замена/2.bin", 3 * MiB),
+            pair.WriteRandom("замена/3.bin", 20 * MiB + 1),
+        };
+        var offer = await pair.OfferAsync(Path.Combine(pair.Files, "замена"));
+        var before = pair.Receiver.SessionForTest(pair.SourceId);
+        Assert.NotNull(before);
+        var servedBefore = pair.Source.ServedFileBytes;
+        var replaced = 0;
+        var changed = false;
+        long lastProgress = 0;
+        var progress = new SyncProgress(total =>
+        {
+            Interlocked.Exchange(ref lastProgress, total);
+            if (total < 24 * MiB || Interlocked.Exchange(ref replaced, 1) != 0)
+                return;
+            // Поток прежнего сеанса стоит, пока сеанс не сменится: остаток по нему уже не придёт.
+            var connect = Task.Run(() => pair.Smaller.ConnectNowForTestAsync(pair.Larger.DeviceId));
+            changed = WaitSessionChanged(pair, before);
+            connect.Wait(TimeSpan.FromSeconds(10));
+        });
+        var target = Path.Combine(pair.Root, "target");
+        var result = await pair.Receiver.DownloadFilesAsync(offer, pair.SourceId, target, progress, CancellationToken.None);
+        Assert.True(changed, "сеанс не сменился");
+        var top = Assert.Single(result);
+        for (var i = 0; i < data.Length; i++)
+            Assert.True(data[i].AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(top, $"{i + 1}.bin"))), $"файл {i + 1}");
+        // Каждый байт получен один раз, и источник не отдавал всё заново: лишнее — только то, что было в пути.
+        Assert.Equal(offer.Total, Interlocked.Read(ref lastProgress));
+        Assert.InRange(pair.Source.ServedFileBytes - servedBefore, offer.Total, offer.Total + 16 * MiB);
+    }
+
+    [Fact]
+    public async Task StreamContinuesAfterSessionReplaced()
+    {
+        await using var pair = await NodePair.StartAsync(p => p.Smaller.ConnectsAutomatically = false);
+        var data = pair.WriteRandom("поток-замена.bin", 48 * MiB + 5);
+        var offer = await pair.OfferAsync(Path.Combine(pair.Files, "поток-замена.bin"));
+        var before = pair.Receiver.SessionForTest(pair.SourceId);
+        using var stream = pair.Receiver.OpenFileStream(offer, pair.SourceId, 0);
+        var copy = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        while (copy.Length < 8 * MiB)
+            copy.Write(buffer, 0, stream.Read(buffer));
+        await pair.Smaller.ConnectNowForTestAsync(pair.Larger.DeviceId);
+        Assert.True(WaitSessionChanged(pair, before), "сеанс не сменился");
+        int read;
+        while ((read = stream.Read(buffer)) > 0)
+            copy.Write(buffer, 0, read);
+        Assert.True(copy.ToArray().AsSpan().SequenceEqual(data));
+    }
+
+    [Fact]
+    public async Task DownloadAndStreamContinueAfterDrop()
     {
         await using var pair = await NodePair.StartAsync();
+        var data = pair.WriteRandom("обрыв.bin", 48 * MiB + 3);
+        var offer = await pair.OfferAsync(Path.Combine(pair.Files, "обрыв.bin"));
+
+        // Скачивание: источник закрывает сеанс, отдав 20 МиБ; дальше — обычное переподключение.
+        var before = pair.Receiver.SessionForTest(pair.SourceId);
+        var servedBefore = pair.Source.ServedFileBytes;
+        pair.Source.DropSessionOnceAfterFileBytes(servedBefore + 20 * MiB);
+        long lastProgress = 0;
+        var result = await pair.Receiver.DownloadFilesAsync(offer, pair.SourceId, Path.Combine(pair.Root, "target"),
+            new SyncProgress(total => Interlocked.Exchange(ref lastProgress, total)), CancellationToken.None);
+        Assert.True(data.AsSpan().SequenceEqual(File.ReadAllBytes(Assert.Single(result))));
+        Assert.NotSame(before, pair.Receiver.SessionForTest(pair.SourceId));
+        Assert.Equal(offer.Total, Interlocked.Read(ref lastProgress));
+        Assert.InRange(pair.Source.ServedFileBytes - servedBefore, offer.Total, offer.Total + 16 * MiB);
+
+        // Поток: обрыв посреди идущего запроса (читатель не отстаёт).
+        before = pair.Receiver.SessionForTest(pair.SourceId);
+        pair.Source.DropSessionOnceAfterFileBytes(pair.Source.ServedFileBytes + 6 * MiB);
+        using var stream = pair.Receiver.OpenFileStream(offer, pair.SourceId, 0);
+        var copy = new MemoryStream();
+        stream.CopyTo(copy, MiB);
+        Assert.True(copy.ToArray().AsSpan().SequenceEqual(data));
+        Assert.NotSame(before, pair.Receiver.SessionForTest(pair.SourceId));
+    }
+
+    [Fact]
+    public async Task FailsWhenSourceGoesAway()
+    {
+        await using var pair = await NodePair.StartAsync(p => p.Receiver.SessionWaitTimeout = TimeSpan.FromSeconds(2));
         // Больше, чем поток держит наперёд (16 МиБ): файл не может прийти целиком, пока источник ещё на связи.
         // С 8 МиБ источник изредка успевал отдать всё до DisposeAsync — и чтение заканчивалось без ошибки.
-        pair.WriteRandom("уйдёт.bin", 48 * 1024 * 1024);
+        pair.WriteRandom("уйдёт.bin", 48 * MiB);
         var offer = await pair.OfferAsync(Path.Combine(pair.Files, "уйдёт.bin"));
         using var stream = pair.Receiver.OpenFileStream(offer, pair.SourceId, 0);
         stream.ReadExactly(new byte[10]);
         await pair.Source.DisposeAsync();
         var error = Assert.Throws<FileTransferException>(() =>
         {
-            var buffer = new byte[1024 * 1024];
+            var buffer = new byte[MiB];
             while (stream.Read(buffer) > 0)
             {
             }
@@ -298,6 +402,24 @@ public class FileTransferSessionLossTests
         var download = await Assert.ThrowsAsync<FileTransferException>(() =>
             pair.Receiver.DownloadFilesAsync(offer, pair.SourceId, Path.Combine(pair.Root, "t"), null, CancellationToken.None));
         Assert.Equal(FileTransferFailure.DeviceUnavailable, download.Failure);
+
+        // Отмена прерывает ожидание сеанса сразу, не дожидаясь срока.
+        pair.Receiver.SessionWaitTimeout = TimeSpan.FromSeconds(30);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        using (var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                pair.Receiver.DownloadFilesAsync(offer, pair.SourceId, Path.Combine(pair.Root, "t"), null, cancel.Token));
+        }
+        using (var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+        {
+            using var waiting = pair.Receiver.OpenFileStream(offer, pair.SourceId, 0);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await waiting.ReadExactlyAsync(new byte[10], cancel.Token));
+        }
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+
+        // Устройство не связано — сразу, без ожидания.
+        Assert.Throws<FileTransferException>(() => pair.Receiver.OpenFileStream(offer, "00000000000000000000000000000000", 0));
     }
 }
 

@@ -548,3 +548,14 @@ files_speed() {
 offer_id() {
     grep -E "^FILES_SENT " "$1" | tail -n 1 | cut -d' ' -f3
 }
+
+# served_bytes ERR_FILE NAME — сколько байт двойник отдал устройству NAME по законченным запросам: сумма строк
+# журнала «Отдано «NAME»: N файлов, M байт». Запрос, прерванный обрывом, сюда не входит.
+served_bytes() {
+    grep -oE "Отдано «$2»: [0-9]+ файлов, [0-9]+ байт" "$1" | awk '{ sum += $(NF - 1) } END { print sum + 0 }'
+}
+
+# offer_total FILE ID — сколько байт в описании («FILES_SENT получателей id элементов байт»).
+offer_total() {
+    grep -E "^FILES_SENT [0-9]+ $2 " "$1" | tail -n 1 | cut -d' ' -f5
+}

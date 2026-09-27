@@ -879,6 +879,9 @@ final class ClipveyNode {
             disconnectedSince[session.peerID] = Date()
             onEvent?("DISCONNECTED \(session.peerName)")
             refreshDevices()
+            // Как Wake() на Windows: если первым подключается этот Mac, сеанс восстанавливается сразу, а не
+            // при следующем обходе (его ждут скачивания файлов, прерванные обрывом).
+            Task { await maintain() }
         }
     }
 

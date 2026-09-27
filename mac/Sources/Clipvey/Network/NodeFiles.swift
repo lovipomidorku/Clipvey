@@ -130,17 +130,76 @@ extension ClipveyNode {
         onFileOffer?(offer, session.peerID, displayName(session))
     }
 
+    // MARK: - Сеанс для запросов
+
+    /// Сколько получатель ждёт сеанс с источником, если его нет: сеанс, по которому шёл запрос, закрылся
+    /// (сменился при одновременном подключении или оборвался) или ещё не восстановился. Больший deviceId
+    /// подключается сам только через 5 с после обрыва, плюс период обслуживания (5 с) — 15 с с запасом.
+    static let fileSessionWait: TimeInterval = 15
+
+    /// Живой сеанс с устройством, кроме lost (закрывшегося); nil — сейчас нет.
+    private func liveSession(_ deviceID: String, except lost: ActiveSession?) -> ActiveSession? {
+        guard let session = sessions[deviceID], session !== lost, !session.files.stopped,
+              store.device(id: deviceID)?.enabled == true else { return nil }
+        return session
+    }
+
+    /// Дождаться живого сеанса с устройством (кроме lost) до deadline. Если lost задан — ещё и того, что его приём
+    /// остановился: тогда известно, сколько по нему получено, и кусков по нему больше не будет. Нет — deviceUnavailable.
+    private func waitForSession(_ deviceID: String, lost: ActiveSession?, until deadline: Date) async throws -> ActiveSession {
+        while true {
+            if lost?.files.stopped ?? true, let session = liveSession(deviceID, except: lost) {
+                return session
+            }
+            guard store.device(id: deviceID)?.enabled == true, Date() < deadline else {
+                throw FileTransferError(.deviceUnavailable, lost == nil ? "нет сеанса с устройством" : "сеанс с устройством оборвался, новый не появился")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Запросить у источника остаток файла (с того места, где остановились) по сеансу session.
+    /// false — сеанс уже завершён или не удалось отправить (сеанс закрывается): запрос повторится по новому.
+    private func requestFile(_ request: IncomingFileRequest, over session: ActiveSession, offerID: String) async -> Bool {
+        let attached: (req: UInt32, offset: Int64)?
+        do {
+            attached = try request.attach(to: session.files)
+        } catch {
+            return false
+        }
+        guard let attached else { return true }
+        do {
+            try await session.link.send(.fileGet(id: offerID, req: attached.req, index: request.index, offset: attached.offset))
+            return true
+        } catch {
+            session.link.cancel()
+            return false
+        }
+    }
+
+    // MARK: - Скачивание
+
     /// Скачать всё описание в directory с сохранением структуры. Возвращает элементы верхнего уровня.
     /// - Пишет во временную скрытую папку в directory и переносит на место только после успеха; при ошибке
     ///   и отмене недокачанное удаляется. Совпадающие имена в directory получают номер: «отчёт (2).pdf».
     /// - Запись на диск идёт не на главном потоке; сеанс не читает из сети быстрее, чем пишет диск.
     /// - progress — сколько байт получено всего, на главном потоке после каждого куска.
+    /// - Сеанса нет или он закрылся посреди скачивания (сменился, оборвался) — ждёт новый до fileSessionWait
+    ///   и продолжает по нему: незаконченные файлы запрашиваются с того места, где остановились, и дописываются.
+    ///   Устройство не связано или выключено — сразу deviceUnavailable.
     /// - Ошибки — FileTransferError (failure — код для интерфейса); отмена задачи — CancellationError
-    ///   (источнику уходит file_cancel). FileTransferFailure(of:) даёт код для любой из них.
+    ///   (источнику уходит file_cancel), в том числе во время ожидания сеанса. FileTransferFailure(of:) даёт код
+    ///   для любой из них.
     func downloadFiles(offer: FileOffer, from deviceID: String, to directory: URL,
                        progress: @escaping @MainActor (Int64) -> Void = { _ in }) async throws -> [URL] {
-        guard let session = sessions[deviceID] else {
-            throw FileTransferError(.deviceUnavailable, "нет сеанса с устройством")
+        guard store.device(id: deviceID)?.enabled == true else {
+            throw FileTransferError(.deviceUnavailable, "устройство не связано или синхронизация с ним выключена")
+        }
+        var session: ActiveSession
+        if let live = liveSession(deviceID, except: nil) {
+            session = live
+        } else {
+            session = try await waitForSession(deviceID, lost: nil, until: Date().addingTimeInterval(Self.fileSessionWait))
         }
         let fileManager = FileManager.default
         let local = FileNames.localPaths(offer.items, windows: false)
@@ -163,6 +222,8 @@ extension ClipveyNode {
 
         let started = Date()
         let counter = ProgressCounter(progress)
+        var resumes = 0
+        // Запросы по порядку файлов; первый — самый ранний незаконченный. Источник отвечает в порядке запросов.
         var pending: [IncomingFileRequest] = []
         do {
             for (index, item) in offer.items.enumerated() where item.isDirectory {
@@ -172,21 +233,39 @@ extension ClipveyNode {
                     throw FileTransferError(.writeFailed, error.localizedDescription)
                 }
             }
-            for (index, item) in offer.items.enumerated() {
-                guard let size = item.size else { continue }
+            var next = 0
+            while true {
                 try Task.checkCancellation()
-                while pending.count >= Self.maxOutstandingRequests {
-                    try await pending[0].wait()
-                    pending.removeFirst()
+                var lost = false
+                // После смены сеанса — незаконченные запросы заново, в прежнем порядке, с того места, где остановились.
+                for request in pending where request.needsRequest {
+                    if await !requestFile(request, over: session, offerID: offer.id) {
+                        lost = true
+                        break
+                    }
                 }
-                let request = try IncomingFileRequest(url: staging.appendingPathComponent(local[index]), size: size, counter: counter)
-                try session.files.register(request)
-                pending.append(request)
-                try await session.link.send(.fileGet(id: offer.id, req: request.req, index: index, offset: 0))
-            }
-            while !pending.isEmpty {
-                try await pending[0].wait()
-                pending.removeFirst()
+                // Новые запросы, пока наперёд отправлено меньше maxOutstandingRequests.
+                while !lost, pending.count < Self.maxOutstandingRequests, next < offer.items.count {
+                    let index = next
+                    next += 1
+                    guard let size = offer.items[index].size else { continue }
+                    let request = try IncomingFileRequest(index: index, url: staging.appendingPathComponent(local[index]), size: size, counter: counter)
+                    pending.append(request)
+                    lost = await !requestFile(request, over: session, offerID: offer.id)
+                }
+                if !lost {
+                    if pending.isEmpty { break }
+                    if try await pending[0].wait() {
+                        pending.removeFirst()
+                        continue
+                    }
+                }
+                Log.files.notice("Файлы \(offer.id, privacy: .public): сеанс с «\(session.peerName, privacy: .public)» закрылся посреди скачивания — жду новый")
+                session.link.cancel()
+                session = try await waitForSession(deviceID, lost: session, until: Date().addingTimeInterval(Self.fileSessionWait))
+                resumes += 1
+                Log.files.notice("Файлы \(offer.id, privacy: .public): продолжаю по новому сеансу с «\(session.peerName, privacy: .public)», получено \(counter.total) байт")
+                onEvent?("FILES_RESUMED \(offer.id) \(counter.total)")
             }
             var results: [URL] = []
             for (index, item) in offer.items.enumerated() where !item.path.contains("/") {
@@ -194,7 +273,7 @@ extension ClipveyNode {
                                                      name: local[index], isDirectory: item.isDirectory))
             }
             let milliseconds = Int(Date().timeIntervalSince(started) * 1000)
-            Log.files.info("Файлы \(offer.id, privacy: .public) от «\(session.peerName, privacy: .public)» скачаны: \(offer.fileCount) файлов, \(counter.total) байт за \(milliseconds) мс")
+            Log.files.info("Файлы \(offer.id, privacy: .public) от «\(session.peerName, privacy: .public)» скачаны: \(offer.fileCount) файлов, \(counter.total) байт за \(milliseconds) мс, сеанс менялся \(resumes) раз")
             return results
         } catch {
             for request in pending {
@@ -204,7 +283,7 @@ extension ClipveyNode {
             if error is CancellationError || error is FileTransferError {
                 throw error
             }
-            // Запись и перенос дают FileTransferError; остальное — не удалось отправить file_get.
+            // Запись, перенос и ожидание сеанса дают FileTransferError; остальное — неожиданная ошибка.
             throw FileTransferError(.deviceUnavailable, error.localizedDescription)
         }
     }
@@ -253,27 +332,26 @@ final class ProgressCounter {
 @MainActor
 final class SessionFiles {
     let server: FileServer
+    let link: PeerLink
     private var requests: [UInt32: IncomingFileRequest] = [:]
     private var lastReq: UInt32 = 0
-    private var stopped = false
+    /// Сеанс завершён, и его цикл приёма вышел: кусков по его запросам больше не будет (stop).
+    private(set) var stopped = false
 
     init(link: PeerLink, peerName: String) {
         server = FileServer(link: link, peerName: peerName)
         self.link = link
     }
 
-    let link: PeerLink
-
-    /// Выдать req (от 1, в пределах сеанса не повторяется) и ждать по нему данные.
-    func register(_ request: IncomingFileRequest) throws {
+    /// Выдать req (от 1, в пределах сеанса не повторяется) и ждать по нему данные. Сеанс завершён — deviceUnavailable.
+    fileprivate func register(_ request: IncomingFileRequest) throws -> UInt32 {
         guard !stopped else { throw FileTransferError(.deviceUnavailable, "сеанс завершён") }
         lastReq = lastReq == UInt32.max ? 1 : lastReq + 1
-        request.req = lastReq
-        request.files = self
         requests[lastReq] = request
+        return lastReq
     }
 
-    func unregister(_ req: UInt32) {
+    fileprivate func unregister(_ req: UInt32) {
         requests[req] = nil
     }
 
@@ -289,55 +367,92 @@ final class SessionFiles {
 
     func end(req: UInt32, size: Int64) async {
         guard let request = requests.removeValue(forKey: req) else { return }
-        request.expectsData = false
         await request.end(size: size)
     }
 
     func fail(req: UInt32, reason: String) {
         guard let request = requests.removeValue(forKey: req) else { return }
-        request.expectsData = false
-        request.finish(.failure(FileTransferError(FileTransferFailure(peerReason: reason), "источник ответил \(reason)")))
-        Task { await request.closeWriter() }
+        request.fail(FileTransferError(FileTransferFailure(peerReason: reason), "источник ответил \(reason)"))
     }
 
-    /// Отправить без ожидания (file_cancel): ошибка отправки значит, что сеанс и так рвётся.
-    func sendInBackground(_ message: WireMessage) {
+    /// Отправить без ожидания (file_cancel). Ошибка отправки значит, что сеанс рвётся: он закрывается,
+    /// и запросы продолжаются по новому сеансу.
+    fileprivate func sendInBackground(_ message: WireMessage) {
         let link = self.link
-        Task { try? await link.send(message) }
+        Task {
+            do {
+                try await link.send(message)
+            } catch {
+                link.cancel()
+            }
+        }
     }
 
-    /// Сеанс завершён: все ожидания — «устройство недоступно», обслуживание — остановить.
+    /// Сеанс завершён (цикл приёма вышел): ожидающим запросам — «сеанс закрылся» (downloadFiles продолжит их
+    /// по новому сеансу с того места, где остановились), обслуживание — остановить. Запросы отмечаются сразу,
+    /// до первого await: пока идёт остановка, сеанс ещё числится в sessions.
     func stop() async {
         stopped = true
         let pending = requests.values
         requests.removeAll()
         for request in pending {
-            request.expectsData = false
-            request.finish(.failure(FileTransferError(.deviceUnavailable, "сеанс с устройством оборвался")))
-            await request.closeWriter()
+            request.sessionLost(self)
         }
         await server.stop()
     }
 }
 
-/// Запрос одного файла при скачивании.
+/// Запрос одного файла при скачивании. Файл открыт до конца: если сеанс закрылся, запрос повторяется по новому
+/// с того места, где остановился (attach), и файл дописывается.
 @MainActor
 final class IncomingFileRequest {
-    fileprivate(set) var req: UInt32 = 0
-    fileprivate weak var files: SessionFiles?
-    /// Источник ещё может прислать данные по req (нет file_end, file_error, обрыва и отмены): при отмене — file_cancel.
-    fileprivate var expectsData = true
+    /// Номер файла в описании.
+    let index: Int
+    /// Сеанс, по которому идёт запрос, и req в нём; nil — не запрошен (новый, сеанс закрылся или запрос закончен).
+    /// Пока задан, источник ещё может прислать данные по req: при отмене — file_cancel.
+    private var files: SessionFiles?
+    private var req: UInt32 = 0
     private let size: Int64
     private let writer: FileWriter
     private let counter: ProgressCounter
     private var received: Int64 = 0
+    /// С какого байта запрошено по текущему сеансу.
+    private var requestStart: Int64 = 0
     private var result: Result<Void, Error>?
-    private var continuation: CheckedContinuation<Void, Error>?
+    /// Сеанс закрылся раньше ответа, и запрос ещё не повторён.
+    private var lost = false
+    /// Ждущий wait(): true — файл получен, false — сеанс закрылся.
+    private var continuation: CheckedContinuation<Bool, Error>?
 
-    init(url: URL, size: Int64, counter: ProgressCounter) throws {
+    init(index: Int, url: URL, size: Int64, counter: ProgressCounter) throws {
+        self.index = index
         self.size = size
         self.counter = counter
         writer = try FileWriter(url: url)
+    }
+
+    /// Запрос надо отправить (снова): он не закончен и не идёт ни по одному сеансу.
+    var needsRequest: Bool { result == nil && files == nil }
+
+    /// Запросить по сеансу files: req и с какого байта; nil — запрос уже закончен. Сеанс завершён — deviceUnavailable.
+    fileprivate func attach(to files: SessionFiles) throws -> (req: UInt32, offset: Int64)? {
+        guard result == nil else { return nil }
+        req = try files.register(self)
+        self.files = files
+        requestStart = received
+        lost = false
+        return (req, received)
+    }
+
+    /// Сеанс from завершился: кусков по нему больше не будет, запрос повторят по новому.
+    fileprivate func sessionLost(_ from: SessionFiles) {
+        guard files === from else { return }
+        files = nil
+        req = 0
+        guard result == nil else { return }
+        lost = true
+        continuation?.resume(returning: false)
+        continuation = nil
     }
 
     fileprivate func chunk(_ data: Data) async {
@@ -358,9 +473,11 @@ final class IncomingFileRequest {
     }
 
     fileprivate func end(size endSize: Int64) async {
+        files = nil
+        req = 0
         guard result == nil else { return }
-        guard endSize == received, received == size else {
-            finish(.failure(FileTransferError(.protocolError, "получено \(received) байт, по file_end \(endSize), ожидалось \(size)")))
+        guard endSize == received - requestStart, received == size else {
+            finish(.failure(FileTransferError(.protocolError, "получено \(received - requestStart) байт с \(requestStart), по file_end \(endSize), размер \(size)")))
             await closeWriter()
             return
         }
@@ -372,15 +489,24 @@ final class IncomingFileRequest {
         }
     }
 
-    /// Отменить: источнику — file_cancel (если он ещё шлёт данные), файл закрывается (папку потом удаляет downloadFiles).
+    /// file_error от источника.
+    fileprivate func fail(_ error: Error) {
+        files = nil
+        req = 0
+        finish(.failure(error))
+        Task { await closeWriter() }
+    }
+
+    /// Отменить: источнику — file_cancel (если запрос идёт), файл закрывается (папку потом удаляет downloadFiles).
     /// Результат мог уже установить обработчик отмены задачи в wait() — file_cancel нужен и тогда.
     func cancel(_ error: Error = CancellationError()) async {
         finish(.failure(error))
-        if expectsData, let files, req != 0 {
-            expectsData = false
+        if let files, req != 0 {
             files.unregister(req)
             files.sendInBackground(.fileCancel(req: req))
         }
+        files = nil
+        req = 0
         await closeWriter()
     }
 
@@ -391,17 +517,24 @@ final class IncomingFileRequest {
     func finish(_ outcome: Result<Void, Error>) {
         guard result == nil else { return }
         result = outcome
-        continuation?.resume(with: outcome)
+        continuation?.resume(with: outcome.map { true })
         continuation = nil
     }
 
-    /// Дождаться file_end (или ошибки). Отмена задачи — CancellationError.
-    func wait() async throws {
-        if let result { return try result.get() }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+    /// Дождаться ответа: true — файл получен; false — сеанс закрылся раньше (запрос надо повторить по новому);
+    /// ошибки источника и записи — исключением. Отмена задачи — CancellationError.
+    func wait() async throws -> Bool {
+        if let result {
+            try result.get()
+            return true
+        }
+        if lost { return false }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
                 if let result {
-                    continuation.resume(with: result)
+                    continuation.resume(with: result.map { true })
+                } else if lost {
+                    continuation.resume(returning: false)
                 } else {
                     self.continuation = continuation
                 }

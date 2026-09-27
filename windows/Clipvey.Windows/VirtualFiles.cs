@@ -533,64 +533,48 @@ public sealed class VirtualFileStream : IStream
             }
             var want = (int)Math.Min(Math.Min(count, buffer.Length), _size - _position);
             var total = 0;
-            while (true)
+            // Смену сеанса и короткий обрыв посреди чтения переживает сам поток узла: продолжает по новому сеансу.
+            try
             {
-                try
+                if (_inner is null)
                 {
-                    if (_inner is null)
-                    {
-                        _inner = _node.OpenFileStream(_set.Offer, _set.Source.DeviceId, _set.Entries[_entry].OfferIndex, _paste.Token);
-                        if (_position > 0)
-                            _inner.Seek(_position, SeekOrigin.Begin);
-                    }
-                    while (total < want)
-                    {
-                        var read = _inner.Read(buffer, total, want - total);
-                        if (read == 0)
-                            throw new FileTransferException(FileTransferFailure.ProtocolError, "данные кончились раньше конца файла");
-                        total += read;
-                        _position += read;
-                        _paste.Progress(_entry, _position);
-                    }
-                    if (_position >= _size)
-                    {
-                        _paste.Completed(_entry);
-                        CloseInner();
-                    }
-                    return total;
+                    _inner = _node.OpenFileStream(_set.Offer, _set.Source.DeviceId, _set.Entries[_entry].OfferIndex, _paste.Token);
+                    if (_position > 0)
+                        _inner.Seek(_position, SeekOrigin.Begin);
                 }
-                catch (OperationCanceledException)
+                while (total < want)
                 {
-                    throw new COMException("Вставка отменена", ErrorCancelled);
+                    var read = _inner.Read(buffer, total, want - total);
+                    if (read == 0)
+                        throw new FileTransferException(FileTransferFailure.ProtocolError, "данные кончились раньше конца файла");
+                    total += read;
+                    _position += read;
+                    _paste.Progress(_entry, _position);
                 }
-                catch (FileTransferException e) when (e.Failure == FileTransferFailure.DeviceUnavailable && _reconnects < MaxReconnects)
+                if (_position >= _size)
                 {
-                    // Сеанс сменился (устройства подключились друг к другу одновременно, и остался второй сеанс)
-                    // или коротко оборвался: продолжить с того же места по новому сеансу.
+                    _paste.Completed(_entry);
                     CloseInner();
-                    if (!Sessions.WaitFor(_node, _set.Source.DeviceId, _paste.Token))
-                        throw Fail(e.Failure, e.Message);
-                    _reconnects++;
-                    Log.Write($"Чтение «{_set.Entries[_entry].Path}» ({_set.Offer.Id}): сеанс сменился, продолжаю с {_position} байт");
                 }
-                catch (FileTransferException e)
-                {
-                    throw Fail(e.Failure, e.Message);
-                }
-                catch (Exception e) when (e is IOException or ObjectDisposedException)
-                {
-                    // Поток закрыт отменой или ошибкой вставки, пока Read ждал данных.
-                    if (_paste.Token.IsCancellationRequested)
-                        throw new COMException("Вставка отменена", ErrorCancelled);
-                    throw Fail(FileTransferFailure.DeviceUnavailable, e.Message);
-                }
+                return total;
+            }
+            catch (OperationCanceledException)
+            {
+                throw new COMException("Вставка отменена", ErrorCancelled);
+            }
+            catch (FileTransferException e)
+            {
+                throw Fail(e.Failure, e.Message);
+            }
+            catch (Exception e) when (e is IOException or ObjectDisposedException)
+            {
+                // Поток закрыт отменой или ошибкой вставки, пока Read ждал данных.
+                if (_paste.Token.IsCancellationRequested)
+                    throw new COMException("Вставка отменена", ErrorCancelled);
+                throw Fail(FileTransferFailure.DeviceUnavailable, e.Message);
             }
         }
     }
-
-    /// Сколько раз один поток продолжает чтение по новому сеансу.
-    private const int MaxReconnects = 3;
-    private int _reconnects;
 
     private COMException Fail(FileTransferFailure failure, string message)
     {
@@ -709,26 +693,6 @@ public interface IDataObjectAsyncCapability
     void InOperation([MarshalAs(UnmanagedType.Bool)] out bool inAsyncOp);
 
     void EndOperation(int result, IBindCtx? reserved, uint effects);
-}
-
-/// Сеансы узла для продолжения передачи после смены сеанса.
-internal static class Sessions
-{
-    /// Подождать (до 5 с), пока с устройством снова есть сеанс. Сеанс, сменившийся при одновременном подключении,
-    /// уже на месте; короткий обрыв успевает восстановиться, если другое устройство подключится само.
-    public static bool WaitFor(ClipveyNode node, string deviceId, CancellationToken ct)
-    {
-        var deadline = Environment.TickCount64 + 5000;
-        while (!ct.IsCancellationRequested)
-        {
-            if (node.Devices.Any(device => device.DeviceId == deviceId && device.Connected))
-                return true;
-            if (Environment.TickCount64 >= deadline)
-                return false;
-            Thread.Sleep(200);
-        }
-        return false;
-    }
 }
 
 /// Буфер обмена OLE: положить свой объект и убрать его при выходе.

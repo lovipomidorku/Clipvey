@@ -28,6 +28,8 @@
 //                       до 4 файлов одновременно)
 //   --save-delay N      начинать скачивание через N секунд после описания
 //   --cancel-files-after N  отменить скачивание, когда получено N байт
+//   --drop-after-bytes N    один раз закрыть сеанс (как при обрыве), когда отдано N байт файлов; дальше — обычное
+//                       переподключение, получатель продолжает с того же места
 // События: READY, PAIRING_CODE, PAIRED, PAIRING_FAILED <код>, CONNECTED, DISCONNECTED, CLIP, SENT,
 //   IMAGE <от кого> <размер> <sha256 hex>, IMAGE_SENT <получателей>, INFO <имя> os=… form=… caps=…,
 //   RENAMED <старое> <новое>, NAME <своё новое имя>,
@@ -97,6 +99,8 @@ switch (command)
 var deviceType = new DeviceType(Option("--os") ?? "windows", Option("--form") ?? "desktop");
 await using var node = new ClipveyNode(identity, store, deviceName, port, deviceType,
     imagesEnabled: Option("--images") != "off", filesEnabled: Option("--files") != "off");
+if (long.TryParse(Option("--drop-after-bytes"), out var dropAfterBytes))
+    node.DropSessionOnceAfterFileBytes(dropAfterBytes);
 using var finished = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
 // kill (SIGTERM) и Ctrl+C завершают штатно: узел закрывается и рассылает mDNS-«прощание».
 // Иначе запись двойника ещё 2 минуты висит в кэше mDNS у других устройств.

@@ -205,27 +205,93 @@ public sealed partial class ClipveyNode
         FileOffered?.Invoke(new FileOfferReceived(offer, session.PeerId, DisplayName(session)));
     }
 
-    private ActiveSession SessionFor(string deviceId)
+    // MARK: - Сеанс для запросов
+
+    /// Сколько получатель ждёт сеанс с источником, если его нет: сеанс, по которому шёл запрос, закрылся
+    /// (сменился при одновременном подключении или оборвался) или ещё не восстановился. Больший deviceId
+    /// подключается сам только через 5 с после обрыва, плюс период обслуживания (5 с) и поиск — 15 с с запасом.
+    /// Меняется только в проверках.
+    internal TimeSpan SessionWaitTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// Живой сеанс с устройством, кроме lost (закрывшегося); null — сейчас нет.
+    private ActiveSession? LiveSession(string deviceId, ActiveSession? lost)
     {
         lock (_lock)
         {
-            if (_sessions.TryGetValue(deviceId, out var session) && !session.Cancellation.IsCancellationRequested)
-                return session;
+            return _sessions.TryGetValue(deviceId, out var session) && session != lost && !_disabled.Contains(deviceId)
+                && !session.Cancellation.IsCancellationRequested && !session.Files.IsStopped
+                ? session
+                : null;
         }
-        throw new FileTransferException(FileTransferFailure.DeviceUnavailable, "нет сеанса с устройством");
     }
+
+    /// Есть смысл ждать сеанс: узел работает и синхронизация с устройством не выключена.
+    private bool CanWaitForSession(string deviceId)
+    {
+        if (_stop.IsCancellationRequested)
+            return false;
+        lock (_lock)
+            return !_disabled.Contains(deviceId);
+    }
+
+    /// Файлы запрашиваются только у связанного устройства с включённой синхронизацией: иначе ждать нечего.
+    private void RequireSessionPossible(string deviceId)
+    {
+        if (!CanWaitForSession(deviceId) || _store.Load().All(device => device.DeviceId != deviceId))
+            throw new FileTransferException(FileTransferFailure.DeviceUnavailable, "устройство не связано или синхронизация с ним выключена");
+    }
+
+    /// Дождаться живого сеанса с устройством (кроме lost) до deadline. Нет — DeviceUnavailable.
+    private async Task<ActiveSession> WaitForSessionAsync(string deviceId, ActiveSession? lost, DateTime deadline, CancellationToken ct)
+    {
+        while (true)
+        {
+            if (LiveSession(deviceId, lost) is { } session)
+                return session;
+            if (!CanWaitForSession(deviceId) || DateTime.UtcNow >= deadline)
+            {
+                throw new FileTransferException(FileTransferFailure.DeviceUnavailable,
+                    lost is null ? "нет сеанса с устройством" : "сеанс с устройством оборвался, новый не появился");
+            }
+            await Task.Delay(100, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// Сеанс, по которому шли запросы файлов, закрылся (сменился при одновременном подключении или оборвался).
+    /// Дождаться, пока его приём остановится (тогда известно, сколько по нему получено, и кусков больше не будет),
+    /// и нового сеанса с тем же устройством — всего не дольше SessionWaitTimeout.
+    private async Task<ActiveSession> ResumeSessionAsync(ActiveSession lost, CancellationToken ct)
+    {
+        lost.Close();
+        var deadline = DateTime.UtcNow + SessionWaitTimeout;
+        try
+        {
+            await lost.Files.Stopped.WaitAsync(SessionWaitTimeout, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new FileTransferException(FileTransferFailure.DeviceUnavailable, "сеанс с устройством не завершился");
+        }
+        return await WaitForSessionAsync(lost.PeerId, lost, deadline, ct).ConfigureAwait(false);
+    }
+
+    // MARK: - Скачивание
 
     /// Скачать всё описание в targetDirectory с сохранением структуры. Возвращает пути элементов верхнего уровня.
     /// - Пишет во временную скрытую папку в targetDirectory и переносит на место только после успеха; при ошибке
     ///   и отмене недокачанное удаляется. Совпадающие имена в targetDirectory получают номер: «отчёт (2).pdf».
     /// - Имена, недопустимые на этой системе, заменяются (FileNames.LocalPaths).
     /// - progress — сколько байт получено всего (из потока сеанса, после каждого куска).
+    /// - Сеанса нет или он закрылся посреди скачивания (сменился, оборвался) — ждёт новый до SessionWaitTimeout
+    ///   и продолжает по нему: незаконченные файлы запрашиваются с того места, где остановились, и дописываются.
     /// - Ошибки — FileTransferException (Failure — код для интерфейса); отмена — OperationCanceledException
     ///   (источнику уходит file_cancel).
     public async Task<IReadOnlyList<string>> DownloadFilesAsync(
         FileOffer offer, string deviceId, string targetDirectory, IProgress<long>? progress, CancellationToken ct)
     {
-        var session = SessionFor(deviceId);
+        RequireSessionPossible(deviceId);
+        var session = LiveSession(deviceId, null)
+            ?? await WaitForSessionAsync(deviceId, null, DateTime.UtcNow + SessionWaitTimeout, ct).ConfigureAwait(false);
         var local = FileNames.LocalPaths(offer.Items, OperatingSystem.IsWindows());
         string staging;
         try
@@ -243,7 +309,9 @@ public sealed partial class ClipveyNode
 
         var stopwatch = Stopwatch.StartNew();
         long received = 0;
-        var pending = new Queue<DownloadRequest>();
+        var resumes = 0;
+        // Запросы по порядку файлов; первый — самый ранний незаконченный. Источник отвечает в порядке запросов.
+        var pending = new List<DownloadRequest>();
         try
         {
             for (var index = 0; index < offer.Items.Count; index++)
@@ -251,28 +319,48 @@ public sealed partial class ClipveyNode
                 if (offer.Items[index].IsDirectory)
                     CreateDirectory(Path.Combine(staging, local[index]));
             }
-            for (var index = 0; index < offer.Items.Count; index++)
+            var next = 0;
+            while (true)
             {
-                if (offer.Items[index].Size is not { } size)
-                    continue;
                 ct.ThrowIfCancellationRequested();
-                while (pending.Count >= MaxOutstandingRequests)
+                var lost = false;
+                // После смены сеанса — незаконченные запросы заново, в прежнем порядке, с того места, где остановились.
+                foreach (var request in pending)
                 {
-                    await WaitOffSessionAsync(pending.Peek().Completion, ct).ConfigureAwait(false);
-                    pending.Dequeue();
+                    if (request.NeedsRequest && !await RequestAsync(session, offer.Id, request, ct).ConfigureAwait(false))
+                    {
+                        lost = true;
+                        break;
+                    }
                 }
-                var request = session.Files.StartDownload(Path.Combine(staging, local[index]), size, count =>
+                // Новые запросы, пока наперёд отправлено меньше MaxOutstandingRequests.
+                while (!lost && pending.Count < MaxOutstandingRequests && next < offer.Items.Count)
                 {
-                    var total = Interlocked.Add(ref received, count);
-                    progress?.Report(total);
-                });
-                pending.Enqueue(request);
-                await session.Info.Channel.SendAsync(FileMessages.Get(offer.Id, request.Req, index, 0), ct).ConfigureAwait(false);
-            }
-            while (pending.Count > 0)
-            {
-                await WaitOffSessionAsync(pending.Peek().Completion, ct).ConfigureAwait(false);
-                pending.Dequeue();
+                    var index = next++;
+                    if (offer.Items[index].Size is not { } size)
+                        continue;
+                    var request = new DownloadRequest(index, Path.Combine(staging, local[index]), size, count =>
+                    {
+                        var total = Interlocked.Add(ref received, count);
+                        progress?.Report(total);
+                    });
+                    pending.Add(request);
+                    lost = !await RequestAsync(session, offer.Id, request, ct).ConfigureAwait(false);
+                }
+                if (!lost)
+                {
+                    if (pending.Count == 0)
+                        break;
+                    if (await WaitRequestAsync(pending[0], session, ct).ConfigureAwait(false))
+                    {
+                        pending.RemoveAt(0);
+                        continue;
+                    }
+                }
+                Log.Write($"Файлы {offer.Id}: сеанс с «{session.PeerName}» закрылся посреди скачивания — жду новый");
+                session = await ResumeSessionAsync(session, ct).ConfigureAwait(false);
+                resumes++;
+                Log.Write($"Файлы {offer.Id}: продолжаю по новому сеансу с «{session.PeerName}», получено {Interlocked.Read(ref received)} байт");
             }
 
             var results = new List<string>();
@@ -281,7 +369,8 @@ public sealed partial class ClipveyNode
                 if (!offer.Items[index].Path.Contains('/'))
                     results.Add(MoveToUnique(Path.Combine(staging, local[index]), targetDirectory, local[index], offer.Items[index].IsDirectory));
             }
-            Log.Write($"Файлы {offer.Id} от «{session.PeerName}» скачаны: {offer.FileCount} файлов, {received} байт за {stopwatch.ElapsedMilliseconds} мс");
+            Log.Write($"Файлы {offer.Id} от «{session.PeerName}» скачаны: {offer.FileCount} файлов, {received} байт за {stopwatch.ElapsedMilliseconds} мс"
+                + (resumes > 0 ? $", сеанс менялся {resumes} раз" : ""));
             return results;
         }
         catch (Exception e)
@@ -291,7 +380,7 @@ public sealed partial class ClipveyNode
             Log.Write($"Файлы {offer.Id} от «{session.PeerName}» не скачаны ({FileTransferFailures.Of(e)}): {e.Message}");
             if (e is OperationCanceledException or FileTransferException)
                 throw;
-            // Запись на диск и перенос уже дают FileTransferException; остальное — не удалось отправить file_get.
+            // Запись, перенос и ожидание сеанса дают FileTransferException; остальное — неожиданная ошибка.
             throw new FileTransferException(FileTransferFailure.DeviceUnavailable, e.Message);
         }
         finally
@@ -320,17 +409,48 @@ public sealed partial class ClipveyNode
         }
     }
 
-    /// Дождаться task или отмены так, чтобы продолжение не выполнилось синхронно в потоке, который завершил task
-    /// или отменил ct. Иначе отмена из progress (он вызывается в потоке сеанса) продолжила бы скачивание — и код
-    /// вызывающего — прямо в потоке сеанса, и сеанс перестал бы читать из сети.
-    private static async Task WaitOffSessionAsync(Task task, CancellationToken ct)
+    /// Запросить у источника остаток файла (с того места, где остановились) по сеансу session.
+    /// false — сеанс уже завершён или не удалось отправить (сеанс закрывается): запрос повторится по новому.
+    private static async Task<bool> RequestAsync(ActiveSession session, string offerId, DownloadRequest request, CancellationToken ct)
+    {
+        (uint Req, long Offset) attached;
+        try
+        {
+            if (request.Attach(session.Files) is not { } value)
+                return true; // Уже закончен.
+            attached = value;
+        }
+        catch (FileTransferException e) when (e.Failure == FileTransferFailure.DeviceUnavailable)
+        {
+            return false;
+        }
+        try
+        {
+            await session.Info.Channel.SendAsync(FileMessages.Get(offerId, attached.Req, request.Index, attached.Offset), ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            session.Close();
+            return false;
+        }
+    }
+
+    /// Дождаться ответа на запрос: true — файл получен; false — сеанс завершился раньше (запрос надо повторить
+    /// по новому); ошибки источника и записи — исключением. Продолжение не выполняется синхронно в потоке, который
+    /// завершил ожидание или отменил ct: иначе отмена из progress (он вызывается в потоке сеанса) продолжила бы
+    /// скачивание — и код вызывающего — прямо в потоке сеанса, и сеанс перестал бы читать из сети.
+    private static async Task<bool> WaitRequestAsync(DownloadRequest request, ActiveSession session, CancellationToken ct)
     {
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using (ct.Register(() => cancelled.TrySetCanceled(ct)))
-            await Task.WhenAny(task, cancelled.Task).ConfigureAwait(false);
+            await Task.WhenAny(request.Completion, session.Files.Stopped, cancelled.Task).ConfigureAwait(false);
         await Task.Yield();
         ct.ThrowIfCancellationRequested();
-        await task.ConfigureAwait(false);
+        if (!request.Completion.IsCompleted)
+            return false;
+        await request.Completion.ConfigureAwait(false);
+        return true;
     }
 
     /// Перенести готовый элемент верхнего уровня в directory; занятое имя — с номером.
@@ -366,13 +486,42 @@ public sealed partial class ClipveyNode
     ///   по сеансу не пришло ни одного куска; ct и Dispose прерывают ожидание.
     /// - Seek и Position работают: запрос перезапускается с нового места (offset).
     /// - Если читатель отстаёт, запрос отменяется и потом возобновляется с нужного места — сеанс не ждёт читателя.
-    /// - Ошибки — FileTransferException (это IOException) с кодом.
+    /// - Сеанса нет или он закрылся (сменился, оборвался) — Read ждёт новый до SessionWaitTimeout и продолжает
+    ///   по нему с того же места.
+    /// - Ошибки — FileTransferException (это IOException) с кодом; устройство не связано или выключено — сразу.
     /// Потокобезопасен; несколько потоков разных файлов (и одного сеанса) можно читать одновременно.
     public Stream OpenFileStream(FileOffer offer, string deviceId, int index, CancellationToken ct = default)
     {
         if (index < 0 || index >= offer.Items.Count || offer.Items[index].Size is not { } size)
             throw new ArgumentOutOfRangeException(nameof(index), "Элемент описания — не файл");
-        return new RemoteFileStream(SessionFor(deviceId), offer.Id, index, size, ct);
+        RequireSessionPossible(deviceId);
+        return new RemoteFileStream(this, deviceId, LiveSession(deviceId, null), offer.Id, index, size, ct);
+    }
+
+    // MARK: - Проверки
+
+    /// Сколько байт файлов отдано по запросам (всего, по всем сеансам).
+    private long _servedFileBytes;
+
+    /// Только для проверок (clipvey-peer --drop-after-bytes): один раз закрыть сеанс, когда отдано столько байт
+    /// файлов. Меньше 0 — выключено.
+    private long _dropAfterFileBytes = -1;
+
+    internal long ServedFileBytes => Interlocked.Read(ref _servedFileBytes);
+
+    internal void DropSessionOnceAfterFileBytes(long bytes) => Interlocked.Exchange(ref _dropAfterFileBytes, bytes);
+
+    /// Отправлен кусок файла. Проверка (DropSessionOnceAfterFileBytes): если пора, закрыть сеанс, как при обрыве;
+    /// true — закрыт.
+    private bool OnChunkServed(ActiveSession session, int length)
+    {
+        var total = Interlocked.Add(ref _servedFileBytes, length);
+        var limit = Interlocked.Read(ref _dropAfterFileBytes);
+        if (limit < 0 || total < limit || Interlocked.CompareExchange(ref _dropAfterFileBytes, -1, limit) != limit)
+            return false;
+        Log.Write($"Проверка: сеанс с «{session.PeerName}» закрыт после {total} байт файлов");
+        session.Close();
+        return true;
     }
 
     // MARK: - Сеанс
@@ -382,9 +531,10 @@ public sealed partial class ClipveyNode
     {
         private readonly object _lock = new();
         private readonly Dictionary<uint, IFileSink> _sinks = [];
+        private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private uint _lastReq;
         private long _lastActivityTicks = DateTime.UtcNow.Ticks;
-        private bool _stopped;
+        private bool _isStopped;
 
         public ActiveSession Session { get; } = session;
 
@@ -393,14 +543,26 @@ public sealed partial class ClipveyNode
         /// Когда по сеансу последний раз приходил кусок, file_end или file_error (для тайм-аута потоков).
         public DateTime LastActivity => new(Interlocked.Read(ref _lastActivityTicks), DateTimeKind.Utc);
 
+        /// Сеанс завершён, и его цикл приёма вышел: кусков по его запросам больше не будет (Stop).
+        public Task Stopped => _stopped.Task;
+
+        public bool IsStopped
+        {
+            get
+            {
+                lock (_lock)
+                    return _isStopped;
+            }
+        }
+
         public void Start(CancellationToken stop) => Server.Start(stop);
 
-        /// Новый req: от 1, в пределах сеанса не повторяется.
+        /// Новый req: от 1, в пределах сеанса не повторяется. Сеанс завершён — FileTransferException(DeviceUnavailable).
         public uint Register(IFileSink sink)
         {
             lock (_lock)
             {
-                if (_stopped)
+                if (_isStopped)
                     throw new FileTransferException(FileTransferFailure.DeviceUnavailable, "сеанс завершён");
                 _lastReq = _lastReq == uint.MaxValue ? 1 : _lastReq + 1;
                 _sinks[_lastReq] = sink;
@@ -435,22 +597,8 @@ public sealed partial class ClipveyNode
         public void OnError(uint req, string reason) =>
             Find(req, remove: true)?.Fail(new FileTransferException(FileTransferFailures.FromPeerReason(reason), $"источник ответил {reason}"));
 
-        public DownloadRequest StartDownload(string path, long size, Action<long> progress)
-        {
-            var request = new DownloadRequest(this, path, size, progress);
-            try
-            {
-                request.Req = Register(request);
-            }
-            catch
-            {
-                request.Cancel();
-                throw;
-            }
-            return request;
-        }
-
-        /// Отправить без ожидания (из потока сеанса и из Dispose): ошибка отправки значит, что сеанс и так рвётся.
+        /// Отправить без ожидания (из потока сеанса и из Dispose). Ошибка отправки значит, что сеанс рвётся:
+        /// он закрывается, и запросы продолжаются по новому сеансу.
         public void SendInBackground(JsonObject message) =>
             _ = Task.Run(async () =>
             {
@@ -460,22 +608,24 @@ public sealed partial class ClipveyNode
                 }
                 catch (Exception)
                 {
-                    // Сеанс завершается, запросы получат DeviceUnavailable.
+                    Session.Close();
                 }
             });
 
-        /// Сеанс завершён: все ожидания — «устройство недоступно», обслуживание — остановить.
+        /// Сеанс завершён (цикл приёма вышел): ожидающим запросам — «сеанс закрылся» (они продолжатся по новому
+        /// сеансу с того места, где остановились), обслуживание — остановить.
         public void Stop()
         {
             List<IFileSink> sinks;
             lock (_lock)
             {
-                _stopped = true;
+                _isStopped = true;
                 sinks = [.. _sinks.Values];
                 _sinks.Clear();
             }
             foreach (var sink in sinks)
-                sink.Fail(new FileTransferException(FileTransferFailure.DeviceUnavailable, "сеанс с устройством оборвался"));
+                sink.SessionLost(this);
+            _stopped.TrySetResult();
             Server.Stop();
         }
     }
@@ -489,15 +639,19 @@ public sealed partial class ClipveyNode
         /// file_end.
         void OnEnd(long size);
 
-        /// file_error, обрыв сеанса.
+        /// file_error.
         void Fail(Exception error);
+
+        /// Сеанс files, по которому шёл запрос, завершился: кусков по нему больше не будет. Запрос не закончен —
+        /// его повторят по новому сеансу с того места, где остановились.
+        void SessionLost(SessionFiles files);
     }
 
     /// Запрос одного файла при скачивании: куски пишутся прямо на диск из потока сеанса (так сеанс не читает
-    /// из сети быстрее, чем пишет диск).
+    /// из сети быстрее, чем пишет диск). Файл открыт до конца: если сеанс закрылся, запрос повторяется по новому
+    /// с того места, где остановился (Attach), и файл дописывается.
     private sealed class DownloadRequest : IFileSink
     {
-        private readonly SessionFiles _files;
         private readonly string _path;
         private readonly long _size;
         private readonly Action<long> _progress;
@@ -505,10 +659,15 @@ public sealed partial class ClipveyNode
         private readonly object _lock = new();
         private FileStream? _stream;
         private long _received;
+        /// Сеанс, по которому идёт запрос, и req в нём; null — не запрошен (новый или сеанс закрылся).
+        private SessionFiles? _files;
+        private uint _req;
+        /// С какого байта запрошено по текущему сеансу.
+        private long _requestStart;
 
-        public DownloadRequest(SessionFiles files, string path, long size, Action<long> progress)
+        public DownloadRequest(int index, string path, long size, Action<long> progress)
         {
-            _files = files;
+            Index = index;
             _path = path;
             _size = size;
             _progress = progress;
@@ -529,9 +688,46 @@ public sealed partial class ClipveyNode
             }
         }
 
-        public uint Req { get; set; }
+        /// Номер файла в описании.
+        public int Index { get; }
 
         public Task Completion => _completion.Task;
+
+        /// Запрос надо отправить (снова): он не закончен и не идёт ни по одному сеансу.
+        public bool NeedsRequest
+        {
+            get
+            {
+                lock (_lock)
+                    return _stream is not null && _files is null;
+            }
+        }
+
+        /// Запросить по сеансу files: req и с какого байта; null — запрос уже закончен.
+        /// Сеанс завершён — FileTransferException(DeviceUnavailable).
+        public (uint Req, long Offset)? Attach(SessionFiles files)
+        {
+            lock (_lock)
+            {
+                if (_stream is null)
+                    return null;
+                _req = files.Register(this);
+                _files = files;
+                _requestStart = _received;
+                return (_req, _received);
+            }
+        }
+
+        public void SessionLost(SessionFiles files)
+        {
+            lock (_lock)
+            {
+                if (_files != files)
+                    return;
+                _files = null;
+                _req = 0;
+            }
+        }
 
         public void OnChunk(SessionFrame frame)
         {
@@ -565,10 +761,11 @@ public sealed partial class ClipveyNode
             {
                 if (_stream is null)
                     return;
-                if (size != _received || _received != _size)
+                _files = null;
+                if (size != _received - _requestStart || _received != _size)
                 {
                     FailLocked(new FileTransferException(FileTransferFailure.ProtocolError,
-                        $"получено {_received} байт, по file_end {size}, ожидалось {_size}"), cancel: false);
+                        $"получено {_received - _requestStart} байт с {_requestStart}, по file_end {size}, размер {_size}"), cancel: false);
                     return;
                 }
                 try
@@ -589,10 +786,14 @@ public sealed partial class ClipveyNode
         public void Fail(Exception error)
         {
             lock (_lock)
+            {
+                _files = null;
                 FailLocked(error, cancel: false);
+            }
         }
 
-        /// Отмена скачивания: источнику — file_cancel, файл закрывается (папку потом удаляет DownloadFilesAsync).
+        /// Отмена скачивания: источнику — file_cancel (если запрос идёт), файл закрывается (папку потом удаляет
+        /// DownloadFilesAsync).
         public void Cancel()
         {
             lock (_lock)
@@ -612,12 +813,14 @@ public sealed partial class ClipveyNode
                     // Файл всё равно будет удалён вместе с временной папкой.
                 }
                 _stream = null;
-                if (cancel && Req != 0)
+                if (cancel && _files is { } files)
                 {
-                    _files.Unregister(Req);
-                    _files.SendInBackground(FileMessages.Cancel(Req));
+                    files.Unregister(_req);
+                    files.SendInBackground(FileMessages.Cancel(_req));
                 }
             }
+            _files = null;
+            _req = 0;
             _completion.TrySetException(error);
             // Исключение наблюдается ожидающим; если ожидающего уже нет (отмена), не шуметь в UnobservedTaskException.
             _ = _completion.Task.Exception;
@@ -766,6 +969,8 @@ public sealed partial class ClipveyNode
                     await channel.SendChunkAsync(frame, job.Req, length, ct).ConfigureAwait(false);
                     position += length;
                     sent += length;
+                    if (session.Node.OnChunkServed(session, length))
+                        return;
                 }
                 if (Length(handle) != job.Size)
                 {
@@ -819,7 +1024,8 @@ public sealed partial class ClipveyNode
         /// Возобновить запрос, когда у читателя осталось меньше этого.
         private const long LowWater = 4L * 1024 * 1024;
 
-        private readonly SessionFiles _files;
+        private readonly ClipveyNode _node;
+        private readonly string _deviceId;
         private readonly string _offerId;
         private readonly int _index;
         private readonly long _length;
@@ -840,10 +1046,18 @@ public sealed partial class ClipveyNode
         private Exception? _error;
         private DateTime _lastData = DateTime.UtcNow;
         private bool _disposed;
+        /// Сеанс, по которому идут запросы; null — сеанса нет (не было при открытии или закрылся), ждём новый.
+        private SessionFiles? _files;
+        /// Сеанс, который закрылся: новый должен быть другим.
+        private ActiveSession? _lostSession;
+        /// С какого момента ждём сеанс; null — не ждём.
+        private DateTime? _waitingSince;
 
-        public RemoteFileStream(ActiveSession session, string offerId, int index, long length, CancellationToken ct)
+        public RemoteFileStream(ClipveyNode node, string deviceId, ActiveSession? session, string offerId, int index, long length, CancellationToken ct)
         {
-            _files = session.Files;
+            _node = node;
+            _deviceId = deviceId;
+            _files = session?.Files;
             _offerId = offerId;
             _index = index;
             _length = length;
@@ -904,14 +1118,20 @@ public sealed partial class ClipveyNode
                     _ct.ThrowIfCancellationRequested();
                     ct.ThrowIfCancellationRequested();
                     ResumeLocked();
-                    var lastActivity = _files.LastActivity > _lastData ? _files.LastActivity : _lastData;
-                    if (DateTime.UtcNow - lastActivity > TimeSpan.FromMilliseconds(ReadTimeout))
-                    {
-                        CancelActiveLocked();
-                        _error = new FileTransferException(FileTransferFailure.Unavailable, $"нет данных {ReadTimeout / 1000} с");
+                    if (_error is not null)
                         throw _error;
+                    // Пока ждём новый сеанс, срок задаёт SessionWaitTimeout, а не ReadTimeout.
+                    if (_files is { } files)
+                    {
+                        var lastActivity = files.LastActivity > _lastData ? files.LastActivity : _lastData;
+                        if (DateTime.UtcNow - lastActivity > TimeSpan.FromMilliseconds(ReadTimeout))
+                        {
+                            CancelActiveLocked();
+                            _error = new FileTransferException(FileTransferFailure.Unavailable, $"нет данных {ReadTimeout / 1000} с");
+                            throw _error;
+                        }
                     }
-                    Monitor.Wait(_lock, 250);
+                    Monitor.Wait(_lock, _files is null ? 100 : 250);
                 }
             }
         }
@@ -938,27 +1158,58 @@ public sealed partial class ClipveyNode
         }
 
         /// Запросить данные с _nextOffset, если запроса нет, данные ещё нужны и читатель не отстал.
+        /// Сеанса нет — взять новый, если он уже есть; нет дольше SessionWaitTimeout — DeviceUnavailable в _error.
         private void ResumeLocked()
         {
             if (_activeReq != 0 || _error is not null || _disposed || _nextOffset >= _length || _buffered >= LowWater)
                 return;
-            try
+            while (true)
             {
-                _activeReq = _files.Register(this);
-            }
-            catch (FileTransferException e)
-            {
-                _error = e;
-                return;
+                if (_files is null)
+                {
+                    if (_node.LiveSession(_deviceId, _lostSession) is not { } session)
+                    {
+                        _waitingSince ??= DateTime.UtcNow;
+                        if (!_node.CanWaitForSession(_deviceId) || DateTime.UtcNow - _waitingSince >= _node.SessionWaitTimeout)
+                        {
+                            _error = new FileTransferException(FileTransferFailure.DeviceUnavailable,
+                                _lostSession is null ? "нет сеанса с устройством" : "сеанс с устройством оборвался, новый не появился");
+                        }
+                        return;
+                    }
+                    _files = session.Files;
+                    _waitingSince = null;
+                    if (_lostSession is not null)
+                        Log.Write($"Чтение файла {_index} ({_offerId}): продолжаю по новому сеансу с «{session.PeerName}» с {_nextOffset} байт");
+                }
+                try
+                {
+                    _activeReq = _files.Register(this);
+                    break;
+                }
+                catch (FileTransferException)
+                {
+                    // Сеанс уже завершён, а Stop нас не застал (запрос был отменён: читатель отставал).
+                    LoseSessionLocked();
+                }
             }
             _requestStart = _nextOffset;
             _lastData = DateTime.UtcNow;
             _files.SendInBackground(FileMessages.Get(_offerId, _activeReq, _index, _nextOffset));
         }
 
+        /// Сеанс закрылся: полученное остаётся, запрос повторится по новому сеансу с _nextOffset.
+        private void LoseSessionLocked()
+        {
+            _lostSession = _files?.Session;
+            _files = null;
+            _activeReq = 0;
+            _waitingSince = DateTime.UtcNow;
+        }
+
         private void CancelActiveLocked()
         {
-            if (_activeReq == 0)
+            if (_activeReq == 0 || _files is null)
                 return;
             _files.Unregister(_activeReq);
             _files.SendInBackground(FileMessages.Cancel(_activeReq));
@@ -1020,6 +1271,17 @@ public sealed partial class ClipveyNode
             {
                 _activeReq = 0;
                 _error ??= error;
+                Monitor.PulseAll(_lock);
+            }
+        }
+
+        public void SessionLost(SessionFiles files)
+        {
+            lock (_lock)
+            {
+                if (_disposed || files != _files)
+                    return;
+                LoseSessionLocked();
                 Monitor.PulseAll(_lock);
             }
         }

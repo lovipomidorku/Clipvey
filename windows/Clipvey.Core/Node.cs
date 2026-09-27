@@ -903,7 +903,7 @@ public sealed partial class ClipveyNode : IAsyncDisposable
     private bool Adopt(SessionInfo info, string? host, int? port)
     {
         var peerId = info.Peer.DeviceId;
-        var session = new ActiveSession(info);
+        var session = new ActiveSession(info, this);
         ActiveSession? replaced = null;
         lock (_lock)
         {
@@ -1147,7 +1147,7 @@ public sealed partial class ClipveyNode : IAsyncDisposable
 
         foreach (var device in disconnected)
         {
-            if (!ShouldInitiate(device.DeviceId))
+            if (!ConnectsAutomatically || !ShouldInitiate(device.DeviceId))
                 continue;
             var endpoints = EndpointsFor(device);
             if (endpoints.Count > 0)
@@ -1241,6 +1241,27 @@ public sealed partial class ClipveyNode : IAsyncDisposable
         }
     }
 
+    // MARK: - Только для проверок
+
+    /// Подключаться к связанным устройствам самому. false — только в проверках: сеанс начинает другая сторона
+    /// или ConnectNowForTestAsync.
+    internal bool ConnectsAutomatically { get; set; } = true;
+
+    /// Подключиться к устройству сейчас, даже если сеанс уже есть, — как при одновременном подключении обеих
+    /// сторон: сеансов станет два, и Adopt оставит один по обычному правилу.
+    internal async Task ConnectNowForTestAsync(string deviceId)
+    {
+        var device = _store.Load().Single(device => device.DeviceId == deviceId);
+        await TryConnectAsync(device, EndpointsFor(device), _stop.Token);
+    }
+
+    /// Текущий сеанс с устройством (только чтобы сравнить: сменился ли); null — нет.
+    internal object? SessionForTest(string deviceId)
+    {
+        lock (_lock)
+            return _sessions.GetValueOrDefault(deviceId);
+    }
+
     private void Wake()
     {
         if (_wake.CurrentCount == 0)
@@ -1269,21 +1290,30 @@ public sealed partial class ClipveyNode : IAsyncDisposable
 
     /// Сеанс с устройством. PeerName, Caps, Outgoing и Sending меняются под _lock узла;
     /// Receiving и SkippingId — только в цикле приёма сеанса.
-    private sealed class ActiveSession(SessionInfo info)
+    private sealed class ActiveSession
     {
-        public SessionInfo Info { get; } = info;
+        public ActiveSession(SessionInfo info, ClipveyNode node)
+        {
+            Info = info;
+            Node = node;
+            PeerName = info.PeerName;
+            Caps = [.. info.Remote.Caps ?? []];
+            Files = new SessionFiles(this);
+        }
+
+        public SessionInfo Info { get; }
+        public ClipveyNode Node { get; }
         public CancellationTokenSource Cancellation { get; } = new();
         public string PeerId => Info.Peer.DeviceId;
-        public string PeerName { get; set; } = info.PeerName;
+        public string PeerName { get; set; }
         /// Последний известный caps другой стороны. В ready отсутствие caps значит «ничего» (так у 0.1.0).
-        public HashSet<string> Caps { get; set; } = [.. info.Remote.Caps ?? []];
+        public HashSet<string> Caps { get; set; }
         public BlobAssembly? Receiving { get; set; }
         public string? SkippingId { get; set; }
         public Queue<OutgoingImage> Outgoing { get; } = new();
         public bool Sending { get; set; }
-        /// Файлы этого сеанса: обслуживание file_get и приём кусков (NodeFiles.cs). Создаётся в Adopt до цикла приёма.
-        public SessionFiles Files => _files ??= new SessionFiles(this);
-        private SessionFiles? _files;
+        /// Файлы этого сеанса: обслуживание file_get и приём кусков (NodeFiles.cs).
+        public SessionFiles Files { get; }
 
         public void Close()
         {
