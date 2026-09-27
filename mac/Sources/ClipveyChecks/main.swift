@@ -107,6 +107,127 @@ func sampleMessages(keyI: Data, keyR: Data, commit: Data, nonceI: Data, nonceR: 
             text: "Привет, мир!\nhttps://example.com/путь?a=1&b=2 — «кавычки» \"двойные\" \\ обратная черта\ttab 😀"))),
         ("ping", .ping),
         ("pong", .pong),
+        ("file_offer", .fileOffer(sampleOffer)),
+        ("file_get", .fileGet(id: sampleOffer.id, req: 7, index: 4, offset: 3_000_000_000)),
+        ("file_end", .fileEnd(req: 7, size: 2_000_000_000)),
+        ("file_error", .fileError(req: 8, reason: "changed")),
+        ("file_cancel", .fileCancel(req: 4_294_967_295)),
+    ]
+}
+
+/// Описание для образцов: кириллица, эмодзи, пустая папка, пустой файл, размер больше 2^32.
+let sampleOffer = FileOffer(
+    id: "0123456789abcdef0123456789abcdef",
+    items: [
+        .directory("Отчёты 2025"),
+        .file("Отчёты 2025/итог.pdf", size: 12345),
+        .directory("Отчёты 2025/пустая папка"),
+        .file("Отчёты 2025/пустой.txt", size: 0),
+        .file("фото 😀.jpg", size: 5_000_000_000),
+    ],
+    total: 5_000_012_345)
+
+/// Описание file_offer строкой JSON (для неверных образцов, которые WireMessage не закодирует).
+func offerJSON(id: String = "0123456789abcdef0123456789abcdef", _ items: [[String: Any]], total: Any) -> String {
+    let object: [String: Any] = ["t": "file_offer", "id": id, "items": items, "total": total]
+    return String(decoding: try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+}
+
+func dir(_ path: String) -> [String: Any] { ["path": path, "dir": true] }
+func file(_ path: String, _ size: Any) -> [String: Any] { ["path": path, "size": size] }
+
+/// Вложенные папки из частей заданной длины: a…a/b…b/… (каждая с родителем).
+func nestedDirs(_ parts: Int, _ length: Int) -> [[String: Any]] {
+    var result: [[String: Any]] = []
+    var path = ""
+    for index in 0..<parts {
+        let part = String(repeating: Character(UnicodeScalar(UInt8(0x61 + index))), count: length)
+        path = path.isEmpty ? part : "\(path)/\(part)"
+        result.append(dir(path))
+    }
+    return result
+}
+
+/// Описания для проверки правил docs/protocol.md, «Описание»: верные принимаются, неверные отбрасываются целиком.
+func sampleOffers() -> [String: Any] {
+    let longPart = String(repeating: "ж", count: 128)  // 256 байт UTF-8
+    let valid: [(String, String)] = [
+        ("только пустая папка", offerJSON([dir("Пустая")], total: 0)),
+        ("пустой файл", offerJSON([file("пустой.txt", 0)], total: 0)),
+        ("часть ровно 255 байт", offerJSON([file(String(repeating: "ж", count: 127) + "a", 1)], total: 1)),
+        ("путь ровно 1024 байта", offerJSON(nestedDirs(5, 204), total: 0)),
+        ("ровно 10 ГиБ", offerJSON([file("a", 5_368_709_120), file("b", 5_368_709_120)], total: 10_737_418_240)),
+        ("точки и пробелы в именах", offerJSON([dir("...a"), file("...a/ b .txt", 3), file(".hidden", 1)], total: 4)),
+    ]
+    let invalid: [(String, String)] = [
+        ("часть ..", offerJSON([dir("..")], total: 0)),
+        ("часть . внутри", offerJSON([dir("a"), dir("a/.")], total: 0)),
+        ("путь с / в начале", offerJSON([dir("/etc")], total: 0)),
+        ("/ в конце", offerJSON([dir("a/")], total: 0)),
+        ("пустая часть", offerJSON([dir("a"), dir("a//b")], total: 0)),
+        ("обратная черта", offerJSON([file("a\\b", 1)], total: 1)),
+        ("двоеточие", offerJSON([file("C:", 1)], total: 1)),
+        ("символ 0", offerJSON([file("a\u{0}b", 1)], total: 1)),
+        ("часть длиннее 255 байт", offerJSON([file(longPart, 1)], total: 1)),
+        ("путь длиннее 1024 байт", offerJSON(nestedDirs(5, 205), total: 0)),
+        ("повтор пути", offerJSON([file("a", 1), file("a", 1)], total: 2)),
+        ("нет родительской папки", offerJSON([file("a/b", 1)], total: 1)),
+        ("родитель — файл", offerJSON([file("a", 1), file("a/b", 1)], total: 2)),
+        ("родитель ниже по списку", offerJSON([file("a/b", 1), dir("a")], total: 1)),
+        ("у папки есть size", offerJSON([["path": "a", "dir": true, "size": 0]], total: 0)),
+        ("у файла нет size", offerJSON([["path": "a"]], total: 0)),
+        ("size дробный", offerJSON([file("a", 1.5)], total: 1.5)),
+        ("size строкой", offerJSON([file("a", "1")], total: 1)),
+        ("size меньше нуля", offerJSON([file("a", -1)], total: -1)),
+        ("total не равен сумме", offerJSON([file("a", 1), file("b", 2)], total: 4)),
+        ("больше 10 ГиБ", offerJSON([file("a", 5_368_709_120), file("b", 5_368_709_121)], total: 10_737_418_241)),
+        ("пустой items", offerJSON([], total: 0)),
+        ("id не hex", offerJSON(id: "0123456789abcdef0123456789abcdeg", [dir("a")], total: 0)),
+        ("id заглавными", offerJSON(id: "0123456789ABCDEF0123456789ABCDEF", [dir("a")], total: 0)),
+        ("id короче 32", offerJSON(id: "0123456789abcdef", [dir("a")], total: 0)),
+        ("путь не строка", offerJSON([["path": 5, "size": 1]], total: 1)),
+    ]
+    func entries(_ list: [(String, String)]) -> [[String: String]] { list.map { ["name": $0.0, "json": $0.1] } }
+    return [
+        "comment": "Описания file_offer: valid принимаются, invalid отбрасываются целиком (сеанс продолжается). Больше 10 000 элементов проверяется отдельно, без образца.",
+        "valid": entries(valid),
+        "invalid": entries(invalid),
+    ]
+}
+
+/// Имена на диске у получателя и имена в описании у отправителя (docs/protocol.md, «Поведение сторон»).
+func sampleFileNames() -> [String: Any] {
+    let items: [FileItem] = [
+        .file("Отчёт.pdf", size: 1),
+        .file("отчёт.PDF", size: 1),
+        .directory("Папка"),
+        .file("Папка/a?b*.txt", size: 1),
+        .file("Папка/a_b_.txt", size: 1),
+        .file("Папка/.hidden", size: 1),
+        .file("Папка/.HIDDEN", size: 1),
+        .file("con.txt", size: 1),
+        .directory("LPT1"),
+        .file("точка в конце.", size: 1),
+        .file("пробел в конце ", size: 1),
+        .file("tab\tname", size: 1),
+        .file("a<b>|\"c", size: 1),
+        .directory("PAPKA"),
+        .directory("papka"),
+        .file("papka/x.txt", size: 1),
+        .file("com0", size: 1),
+        .file("COM9.log", size: 1),
+    ]
+    let wire: [String] = ["12:05 отчёт.txt", "a\\b", "й ё".decomposedStringWithCanonicalMapping, "обычное имя.txt"]
+    let numbered: [(String, Int, Bool)] = [("отчёт.pdf", 2, false), (".bashrc", 3, false), ("Папка.v2", 2, true), ("архив.tar.gz", 10, false), ("без точки", 2, false)]
+    return [
+        "comment": "Имена: local — пути на диске у получателя (mac — без замен, windows — с заменой недопустимого в Windows), wire — имя в описании у отправителя (NFC, «\\» и «:» → «_»), numbered — имя с номером при совпадении.",
+        "items": items.map { item -> [String: Any] in
+            item.isDirectory ? ["path": item.path, "dir": true] : ["path": item.path, "size": item.size!]
+        },
+        "mac": FileNames.localPaths(items, windows: false),
+        "windows": FileNames.localPaths(items, windows: true),
+        "wire": wire.map { ["local_hex": Data($0.utf8).hex, "wire": FileNames.wireName($0)] },
+        "numbered": numbered.map { ["name": $0.0, "number": $0.1, "dir": $0.2, "result": FileNames.numbered($0.0, $0.1, isDirectory: $0.2)] },
     ]
 }
 
@@ -160,6 +281,26 @@ func generate() -> [String: Any] {
         ]
     }
 
+    // Двоичные куски файлов: отдельный раздел (открытый текст — не JSON).
+    let chunkSpecs: [(String, Data, UInt64, UInt32, Data)] = [
+        ("R→I, req 1, счётчик 5", kRI, 5, 1, Data("начало файла".utf8)),
+        ("I→R, req 4294967295, счётчик 0x0102030405060708", kIR, 0x0102_0304_0506_0708, 4_294_967_295, Data((0...255).map { UInt8($0) })),
+    ]
+    let chunkFrames: [[String: Any]] = chunkSpecs.map { name, key, counter, req, data in
+        var codec = SecureCodec(sendKey: SymmetricKey(data: key), receiveKey: SymmetricKey(data: key), sendCounter: counter, receiveCounter: counter)
+        let plaintext = WireMessage.fileChunk(req: req, data: data).encode()
+        return [
+            "name": name,
+            "key": key.hex,
+            "counter": String(counter),
+            "nonce": SecureCodec.nonce(counter).hex,
+            "req": Int(req),
+            "data": data.hex,
+            "plaintext": plaintext.hex,
+            "payload": try! codec.seal(plaintext).hex,
+        ]
+    }
+
     let messages: [[String: Any]] = sampleMessages(
         keyI: pkI, keyR: pkR, commit: commit, nonceI: nonceI, nonceR: nonceR, ephI: eI, ephR: eR, idI: idI, idR: idR
     ).map { name, message in
@@ -206,6 +347,9 @@ func generate() -> [String: Any] {
         "frames": frames,
         "messages": messages,
         "blob": blob,
+        "file_chunk_frames": chunkFrames,
+        "file_offers": sampleOffers(),
+        "file_names": sampleFileNames(),
     ]
 }
 
@@ -355,6 +499,7 @@ var failures: [String] = []
 
     verifyNewFields(v)
     verifyBlob(v)
+    verifyFiles(v)
 
     // Подпись релиза (docs/releases.md): base64 r‖s, ECDSA P-256 с SHA-256, одноразовый ключ.
     if let release = v["release_signature"] as? [String: String] {
@@ -555,6 +700,219 @@ var failures: [String] = []
     }
     check("картинка ровно 20 МиБ принимается",
           BlobAssembly.refusal(BlobStart(id: "x", origin: "o", hops: 0, mime: "image/jpeg", size: 20_971_520, sha256: sha)) == nil)
+}
+
+// MARK: - Файлы
+
+@MainActor func verifyFiles(_ v: [String: Any]) {
+    // Двоичные куски: шифрование, расшифровка и разбор.
+    guard let chunkFrames = v["file_chunk_frames"] as? [[String: Any]], !chunkFrames.isEmpty else {
+        check("раздел file_chunk_frames", false, "нет")
+        return
+    }
+    for frame in chunkFrames {
+        let name = frame["name"] as! String
+        let key = SymmetricKey(data: Data(hex: frame["key"] as! String))
+        let counter = UInt64(frame["counter"] as! String)!
+        let req = UInt32(frame["req"] as! Int)
+        let data = Data(hex: frame["data"] as! String)
+        let plaintext = WireMessage.fileChunk(req: req, data: data).encode()
+        expectEqual("кусок \(name): открытый текст", plaintext.hex, frame["plaintext"] as! String)
+        expectEqual("кусок \(name): открытый текст без копии данных",
+                    (FileChunk.header(req: req) + data).hex, frame["plaintext"] as! String)
+        var sender = SecureCodec(sendKey: key, receiveKey: key, sendCounter: counter, receiveCounter: counter)
+        expectEqual("кусок \(name): шифротекст‖тег", ((try? sender.seal(plaintext)) ?? Data()).hex, frame["payload"] as! String)
+        var receiver = SecureCodec(sendKey: key, receiveKey: key, sendCounter: counter, receiveCounter: counter)
+        let opened = (try? receiver.open(Data(hex: frame["payload"] as! String))) ?? Data()
+        if case .fileChunk(let gotReq, let gotData)? = try? WireMessage.decodeSession(opened) {
+            check("кусок \(name): req и данные", gotReq == req && gotData == data)
+        } else {
+            check("кусок \(name): разбор", false, "не fileChunk")
+        }
+    }
+    func isInvalid(_ plaintext: Data) -> Bool {
+        if case .invalidFileMessage? = try? WireMessage.decodeSession(plaintext) { return true }
+        return false
+    }
+    check("кусок без данных отбрасывается", isInvalid(FileChunk.header(req: 1)))
+    check("кусок короче заголовка отбрасывается", isInvalid(Data([0, 0, 1])))
+    check("кусок больше 1 МиБ отбрасывается", isInvalid(FileChunk.plaintext(req: 1, data: Data(count: 1_048_577))))
+    check("кусок ровно 1 МиБ принимается", !isInvalid(FileChunk.plaintext(req: 1, data: Data(count: 1_048_576))))
+    check("JSON в сеансе разбирается как раньше", (try? WireMessage.decodeSession(Data(#"{"t":"ping"}"#.utf8)))?.type == "ping")
+    check("до шифрования 0x00 — не кусок", (try? WireMessage.decode(FileChunk.plaintext(req: 1, data: Data([1])))) == nil)
+
+    // Сообщения о файлах: разбор образцов.
+    let messages = v["messages"] as! [[String: String]]
+    func sample(_ name: String) -> WireMessage? {
+        messages.first { $0["name"] == name }.flatMap { try? WireMessage.decode(Data($0["json"]!.utf8)) }
+    }
+    if case .fileOffer(let offer)? = sample("file_offer") {
+        check("file_offer: элементы и total", offer == sampleOffer)
+        check("file_offer: файлов 3, верхний уровень 2", offer.fileCount == 3 && offer.topLevel.count == 2)
+    } else {
+        check("file_offer разбирается", false)
+    }
+    if case .fileGet(let id, let req, let index, let offset)? = sample("file_get") {
+        check("file_get: поля", id == sampleOffer.id && req == 7 && index == 4 && offset == 3_000_000_000)
+    } else {
+        check("file_get разбирается", false)
+    }
+    // Неверные поля file_get не рвут сеанс: без req — пропуск, без index/offset — ответ not_found.
+    if case .fileGet(_, _, let index, let offset)? = try? WireMessage.decode(Data(#"{"t":"file_get","id":"x","req":1,"index":-1,"offset":"0"}"#.utf8)) {
+        check("file_get с неверными index и offset: −1", index == -1 && offset == -1)
+    } else {
+        check("file_get с неверными index и offset разбирается", false)
+    }
+    for (name, json) in [
+        ("file_get без req", #"{"t":"file_get","id":"x","index":0,"offset":0}"#),
+        ("file_end с req 0", #"{"t":"file_end","req":0,"size":0}"#),
+        ("file_cancel с req больше 2^32−1", #"{"t":"file_cancel","req":4294967296}"#),
+        ("file_end без size", #"{"t":"file_end","req":1}"#),
+        ("file_offer без items", #"{"t":"file_offer","id":"0123456789abcdef0123456789abcdef","total":0}"#),
+    ] {
+        if case .invalidFileMessage? = try? WireMessage.decode(Data(json.utf8)) {
+            check("пропускается без разрыва: \(name)", true)
+        } else {
+            check("пропускается без разрыва: \(name)", false)
+        }
+    }
+    if case .fileError(_, let reason)? = try? WireMessage.decode(Data(#"{"t":"file_error","req":3}"#.utf8)) {
+        check("file_error без reason — unavailable", reason == "unavailable" && FileTransferFailure(peerReason: reason) == .unavailable)
+    } else {
+        check("file_error без reason разбирается", false)
+    }
+    check("file_error: причины", FileTransferFailure(peerReason: "not_found") == .notFound
+          && FileTransferFailure(peerReason: "changed") == .changed && FileTransferFailure(peerReason: "новая") == .unavailable)
+
+    // Правила описания.
+    if let offers = v["file_offers"] as? [String: Any] {
+        for entry in offers["valid"] as! [[String: String]] {
+            let decoded = try? WireMessage.decode(Data(entry["json"]!.utf8))
+            if case .fileOffer? = decoded {
+                check("описание принимается: \(entry["name"]!)", true)
+            } else if case .invalidFileMessage(_, let reason)? = decoded {
+                check("описание принимается: \(entry["name"]!)", false, reason)
+            } else {
+                check("описание принимается: \(entry["name"]!)", false, "не разобрано")
+            }
+        }
+        for entry in offers["invalid"] as! [[String: String]] {
+            let decoded = try? WireMessage.decode(Data(entry["json"]!.utf8))
+            if case .invalidFileMessage(let type, _)? = decoded, type == "file_offer" {
+                check("описание отбрасывается: \(entry["name"]!)", true)
+            } else {
+                check("описание отбрасывается: \(entry["name"]!)", false, "принято")
+            }
+        }
+    } else {
+        check("раздел file_offers", false, "нет")
+    }
+    let many = (0..<10_000).map { FileItem.file("f\($0)", size: 1) }
+    check("ровно 10 000 элементов принимается", FileOffer.refusal(id: sampleOffer.id, items: many, total: 10_000) == nil)
+    check("10 001 элемент отбрасывается",
+          FileOffer.refusal(id: sampleOffer.id, items: many + [.file("f10000", size: 1)], total: 10_001) != nil)
+    check("пределы файлов", ProtocolLimits.fileChunkBytes == 1_048_576 && ProtocolLimits.maxFileItems == 10_000
+          && ProtocolLimits.maxFileTotalBytes == 10_737_418_240 && ProtocolLimits.fileCapability == "file")
+
+    // Имена.
+    if let names = v["file_names"] as? [String: Any] {
+        let items = (names["items"] as! [[String: Any]]).map { entry in
+            FileItem(path: entry["path"] as! String, size: (entry["dir"] as? Bool) == true ? nil : Int64(entry["size"] as! Int))
+        }
+        check("имена на диске Mac", FileNames.localPaths(items, windows: false) == names["mac"] as! [String],
+              "\(FileNames.localPaths(items, windows: false))")
+        check("имена на диске Windows", FileNames.localPaths(items, windows: true) == names["windows"] as! [String],
+              "\(FileNames.localPaths(items, windows: true))")
+        for entry in names["wire"] as! [[String: String]] {
+            let local = String(decoding: Data(hex: entry["local_hex"]!), as: UTF8.self)
+            expectEqual("имя в описании: \(entry["wire"]!)", FileNames.wireName(local), entry["wire"]!)
+        }
+        for entry in names["numbered"] as! [[String: Any]] {
+            expectEqual("имя с номером: \(entry["result"]!)",
+                        FileNames.numbered(entry["name"] as! String, entry["number"] as! Int, isDirectory: entry["dir"] as! Bool),
+                        entry["result"] as! String)
+        }
+    } else {
+        check("раздел file_names", false, "нет")
+    }
+
+    verifyFileTree()
+}
+
+/// Обход папок у отправителя (FileTree) и кэш полученного (IncomingCache) — на временной папке.
+@MainActor func verifyFileTree() {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("clipvey-checks-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: root) }
+    func write(_ path: String, _ bytes: Int) {
+        let url = root.appendingPathComponent(path)
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        fm.createFile(atPath: url.path, contents: Data(count: bytes))
+    }
+    // «Папка» с файлами, пустой папкой, ссылкой, каналом, .DS_Store и именем с «:» (в Finder — «/»).
+    write("src/Папка/б.txt", 5)
+    write("src/Папка/а.txt", 3)
+    write("src/Папка/.DS_Store", 10)
+    write("src/Папка/12:05.txt", 1)
+    write("src/Папка/вложенная/пустой", 0)
+    try? fm.createDirectory(at: root.appendingPathComponent("src/Папка/пустая"), withIntermediateDirectories: true)
+    try? fm.createSymbolicLink(at: root.appendingPathComponent("src/Папка/ссылка"), withDestinationURL: root.appendingPathComponent("src/Папка/а.txt"))
+    mkfifo(root.appendingPathComponent("src/Папка/канал").path, 0o600)
+    write("other/Папка", 7)
+    // Имя в NFD (как у файлов со старых дисков HFS+): в описании — NFC.
+    write("src/" + "йод.txt".decomposedStringWithCanonicalMapping, 2)
+
+    let roots = [root.appendingPathComponent("src/Папка"), root.appendingPathComponent("other/Папка"),
+                 root.appendingPathComponent("src/" + "йод.txt".decomposedStringWithCanonicalMapping),
+                 root.appendingPathComponent("src/Папка/ссылка")]
+    switch FileTree.build(roots) {
+    case .success(let tree):
+        let paths = tree.items.map { $0.isDirectory ? $0.path + "/" : "\($0.path) \($0.size!)" }
+        let expected = ["Папка/", "Папка/12_05.txt 1", "Папка/а.txt 3", "Папка/б.txt 5", "Папка/вложенная/", "Папка/вложенная/пустой 0",
+                        "Папка/пустая/", "Папка (2) 7", "йод.txt 2"]
+        check("обход: элементы, порядок, пропуски и имена", paths == expected, "\(paths)")
+        check("обход: total", tree.total == 18)
+        check("обход: у каждого элемента свой локальный путь", tree.urls.count == tree.items.count
+              && tree.urls[2].lastPathComponent == "а.txt")
+        check("обход: описание проходит проверку", FileOffer.refusal(id: sampleOffer.id, items: tree.items, total: tree.total) == nil)
+    case .failure(let failure):
+        check("обход папки", false, failure.code)
+    }
+    check("обход: только ссылка — пусто", {
+        if case .failure(.empty) = FileTree.build([root.appendingPathComponent("src/Папка/ссылка")]) { return true }
+        return false
+    }())
+    check("обход: нет файла — не прочитать", {
+        if case .failure(.unreadable) = FileTree.build([root.appendingPathComponent("нет такого")]) { return true }
+        return false
+    }())
+    // Имя длиннее 255 байт и путь длиннее 1024 байт на Mac не создать (NAME_MAX, PATH_MAX) — их проверяют образцы.
+    // Больше 10 000 элементов: папка и 10 000 файлов в ней.
+    let many = root.appendingPathComponent("many")
+    try? fm.createDirectory(at: many, withIntermediateDirectories: true)
+    for index in 0..<10_000 {
+        fm.createFile(atPath: many.appendingPathComponent("f\(index)").path, contents: nil)
+    }
+    check("обход: больше 10 000 элементов", {
+        if case .failure(.tooManyItems) = FileTree.build([many]) { return true }
+        return false
+    }())
+    try? fm.removeItem(at: many.appendingPathComponent("f0"))
+    check("обход: ровно 10 000 элементов", {
+        if case .success(let tree) = FileTree.build([many]) { return tree.items.count == 10_000 }
+        return false
+    }())
+
+    // Кэш: старше суток удаляется, свежее остаётся.
+    let cache = root.appendingPathComponent("Incoming")
+    let old = IncomingCache.directory(root: cache, offerID: "00000000000000000000000000000001")
+    let fresh = IncomingCache.directory(root: cache, offerID: "00000000000000000000000000000002")
+    try? fm.createDirectory(at: old, withIntermediateDirectories: true)
+    try? fm.createDirectory(at: fresh, withIntermediateDirectories: true)
+    let twoDaysAgo = Date().addingTimeInterval(-2 * 86400)
+    try? fm.setAttributes([.modificationDate: twoDaysAgo, .creationDate: twoDaysAgo], ofItemAtPath: old.path)
+    let removed = IncomingCache.clean(root: cache)
+    check("кэш: удалена только старая папка", removed == 1 && !fm.fileExists(atPath: old.path) && fm.fileExists(atPath: fresh.path))
 }
 
 // MARK: - Запуск

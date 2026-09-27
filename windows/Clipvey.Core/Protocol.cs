@@ -38,6 +38,24 @@ public static class Protocol
 
     /// Допустимые mime картинок.
     public static readonly IReadOnlySet<string> ImageMimes = new HashSet<string> { "image/png", "image/jpeg" };
+
+    /// Возможность в caps: устройство принимает файлы.
+    public const string FileCapability = "file";
+
+    /// Данные двоичного куска файла — от 1 байта до 1 МиБ.
+    public const int FileChunkBytes = 1_048_576;
+
+    /// Элементов в описании файлов — не больше.
+    public const int MaxFileItems = 10_000;
+
+    /// Сумма размеров файлов в описании — не больше 10 ГиБ.
+    public const long MaxFileTotalBytes = 10_737_418_240;
+
+    /// Часть пути в описании — не длиннее, байт UTF-8.
+    public const int MaxFileNameBytes = 255;
+
+    /// Весь путь в описании — не длиннее, байт UTF-8.
+    public const int MaxFilePathBytes = 1024;
 }
 
 /// Почему не удалось связаться или подключиться. Код для интерфейса: текст на нужном языке

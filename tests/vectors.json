@@ -19,6 +19,330 @@
     "initiator": "ec2b4635da6e02fc8b8f6095a12ceb88",
     "responder": "a51edaffc182c417fd12315efd5c0ee4"
   },
+  "file_chunk_frames": [
+    {
+      "counter": "5",
+      "data": "d0bdd0b0d187d0b0d0bbd0be20d184d0b0d0b9d0bbd0b0",
+      "key": "5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
+      "name": "R→I, req 1, счётчик 5",
+      "nonce": "000000000000000000000005",
+      "payload": "fee60a3a64a95e0613b2dd2775caee35df41d061674d3cd81b4e51b8193ee0d16bfa27092bb7fb426915a64a",
+      "plaintext": "0000000001d0bdd0b0d187d0b0d0bbd0be20d184d0b0d0b9d0bbd0b0",
+      "req": 1
+    },
+    {
+      "counter": "72623859790382856",
+      "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "key": "1b5fac802ea52916faf0640ba37c382497c9e9fabc8a0bbedaac759b5f14c3bd",
+      "name": "I→R, req 4294967295, счётчик 0x0102030405060708",
+      "nonce": "000000000102030405060708",
+      "payload": "4c88ab3f61dcacc134573d7166f02e204735b0d5746fee07c349aa90207ed037b411881fc12d0ce214636c7b512db799435b4c11831f20dfb58b3285623a5f1d0d232316765c06a03cbb19fc7f92b7af6405d300d623a63f5bf3cb5ef8551e32c09084faa6073e915a0100d129665b44fef8b547314da1960e319a495a3e97fbacca073b66f1b81660cf626b2c8a3f431b7077de7a345676a35fc60b9c6dd0190892598ed4457a97c82c4463b13c825badcf6ae0c525c384a2ede48015f4ad5f9b20cee9db7ce284d85c23da4f2b95ce6cd7c8aac6a9ef063ad1237f078e58321ff4d582dccb47a233f6fdf9322aa44034d4e44e48c7cc2bcc06e40b0ec2b445c2b2e1f27dbf618e34962203ce8cc7928a79a16fb9",
+      "plaintext": "00ffffffff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "req": 4294967295
+    }
+  ],
+  "file_names": {
+    "comment": "Имена: local — пути на диске у получателя (mac — без замен, windows — с заменой недопустимого в Windows), wire — имя в описании у отправителя (NFC, «\\» и «:» → «_»), numbered — имя с номером при совпадении.",
+    "items": [
+      {
+        "path": "Отчёт.pdf",
+        "size": 1
+      },
+      {
+        "path": "отчёт.PDF",
+        "size": 1
+      },
+      {
+        "dir": true,
+        "path": "Папка"
+      },
+      {
+        "path": "Папка/a?b*.txt",
+        "size": 1
+      },
+      {
+        "path": "Папка/a_b_.txt",
+        "size": 1
+      },
+      {
+        "path": "Папка/.hidden",
+        "size": 1
+      },
+      {
+        "path": "Папка/.HIDDEN",
+        "size": 1
+      },
+      {
+        "path": "con.txt",
+        "size": 1
+      },
+      {
+        "dir": true,
+        "path": "LPT1"
+      },
+      {
+        "path": "точка в конце.",
+        "size": 1
+      },
+      {
+        "path": "пробел в конце ",
+        "size": 1
+      },
+      {
+        "path": "tab\tname",
+        "size": 1
+      },
+      {
+        "path": "a<b>|\"c",
+        "size": 1
+      },
+      {
+        "dir": true,
+        "path": "PAPKA"
+      },
+      {
+        "dir": true,
+        "path": "papka"
+      },
+      {
+        "path": "papka/x.txt",
+        "size": 1
+      },
+      {
+        "path": "com0",
+        "size": 1
+      },
+      {
+        "path": "COM9.log",
+        "size": 1
+      }
+    ],
+    "mac": [
+      "Отчёт.pdf",
+      "отчёт (2).PDF",
+      "Папка",
+      "Папка/a?b*.txt",
+      "Папка/a_b_.txt",
+      "Папка/.hidden",
+      "Папка/.HIDDEN (2)",
+      "con.txt",
+      "LPT1",
+      "точка в конце.",
+      "пробел в конце ",
+      "tab\tname",
+      "a<b>|\"c",
+      "PAPKA",
+      "papka (2)",
+      "papka (2)/x.txt",
+      "com0",
+      "COM9.log"
+    ],
+    "numbered": [
+      {
+        "dir": false,
+        "name": "отчёт.pdf",
+        "number": 2,
+        "result": "отчёт (2).pdf"
+      },
+      {
+        "dir": false,
+        "name": ".bashrc",
+        "number": 3,
+        "result": ".bashrc (3)"
+      },
+      {
+        "dir": true,
+        "name": "Папка.v2",
+        "number": 2,
+        "result": "Папка.v2 (2)"
+      },
+      {
+        "dir": false,
+        "name": "архив.tar.gz",
+        "number": 10,
+        "result": "архив.tar (10).gz"
+      },
+      {
+        "dir": false,
+        "name": "без точки",
+        "number": 2,
+        "result": "без точки (2)"
+      }
+    ],
+    "windows": [
+      "Отчёт.pdf",
+      "отчёт (2).PDF",
+      "Папка",
+      "Папка/a_b_.txt",
+      "Папка/a_b_ (2).txt",
+      "Папка/.hidden",
+      "Папка/.HIDDEN (2)",
+      "_con.txt",
+      "_LPT1",
+      "точка в конце_",
+      "пробел в конце_",
+      "tab_name",
+      "a_b___c",
+      "PAPKA",
+      "papka (2)",
+      "papka (2)/x.txt",
+      "com0",
+      "_COM9.log"
+    ],
+    "wire": [
+      {
+        "local_hex": "31323a303520d0bed182d187d191d1822e747874",
+        "wire": "12_05 отчёт.txt"
+      },
+      {
+        "local_hex": "615c62",
+        "wire": "a_b"
+      },
+      {
+        "local_hex": "d0b8cc8620d0b5cc88",
+        "wire": "й ё"
+      },
+      {
+        "local_hex": "d0bed0b1d18bd187d0bdd0bed0b520d0b8d0bcd18f2e747874",
+        "wire": "обычное имя.txt"
+      }
+    ]
+  },
+  "file_offers": {
+    "comment": "Описания file_offer: valid принимаются, invalid отбрасываются целиком (сеанс продолжается). Больше 10 000 элементов проверяется отдельно, без образца.",
+    "invalid": [
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"..\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "часть .."
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"a\"},{\"dir\":true,\"path\":\"a/.\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "часть . внутри"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"/etc\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "путь с / в начале"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"a/\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "/ в конце"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"a\"},{\"dir\":true,\"path\":\"a//b\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "пустая часть"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\\\\b\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "обратная черта"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"C:\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "двоеточие"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\\u0000b\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "символ 0"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"жжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжж\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "часть длиннее 255 байт"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "путь длиннее 1024 байт"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":1},{\"path\":\"a\",\"size\":1}],\"t\":\"file_offer\",\"total\":2}",
+        "name": "повтор пути"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a/b\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "нет родительской папки"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":1},{\"path\":\"a/b\",\"size\":1}],\"t\":\"file_offer\",\"total\":2}",
+        "name": "родитель — файл"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a/b\",\"size\":1},{\"dir\":true,\"path\":\"a\"}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "родитель ниже по списку"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"a\",\"size\":0}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "у папки есть size"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "у файла нет size"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":1.5}],\"t\":\"file_offer\",\"total\":1.5}",
+        "name": "size дробный"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":\"1\"}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "size строкой"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":-1}],\"t\":\"file_offer\",\"total\":-1}",
+        "name": "size меньше нуля"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":1},{\"path\":\"b\",\"size\":2}],\"t\":\"file_offer\",\"total\":4}",
+        "name": "total не равен сумме"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":5368709120},{\"path\":\"b\",\"size\":5368709121}],\"t\":\"file_offer\",\"total\":10737418241}",
+        "name": "больше 10 ГиБ"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[],\"t\":\"file_offer\",\"total\":0}",
+        "name": "пустой items"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdeg\",\"items\":[{\"dir\":true,\"path\":\"a\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "id не hex"
+      },
+      {
+        "json": "{\"id\":\"0123456789ABCDEF0123456789ABCDEF\",\"items\":[{\"dir\":true,\"path\":\"a\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "id заглавными"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"a\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "id короче 32"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":5,\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "путь не строка"
+      }
+    ],
+    "valid": [
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"Пустая\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "только пустая папка"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"пустой.txt\",\"size\":0}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "пустой файл"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"жжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжжa\",\"size\":1}],\"t\":\"file_offer\",\"total\":1}",
+        "name": "часть ровно 255 байт"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},{\"dir\":true,\"path\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"}],\"t\":\"file_offer\",\"total\":0}",
+        "name": "путь ровно 1024 байта"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"path\":\"a\",\"size\":5368709120},{\"path\":\"b\",\"size\":5368709120}],\"t\":\"file_offer\",\"total\":10737418240}",
+        "name": "ровно 10 ГиБ"
+      },
+      {
+        "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"items\":[{\"dir\":true,\"path\":\"...a\"},{\"path\":\"...a/ b .txt\",\"size\":3},{\"path\":\".hidden\",\"size\":1}],\"t\":\"file_offer\",\"total\":4}",
+        "name": "точки и пробелы в именах"
+      }
+    ]
+  },
   "foreign_messages": [
     {
       "json": "{\"t\":\"clip\",\"id\":\"00112233445566778899aabbccddeeff\",\"origin\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"hops\":3,\"text\":\"Привет, мир!\\nhttps://example.com/путь?a=1&b=2 — «кавычки» \\\"двойные\\\" \\\\ обратная черта\\ttab \\uD83D\\uDE00\"}",
@@ -159,6 +483,26 @@
     {
       "json": "{\"t\":\"pong\"}",
       "name": "pong"
+    },
+    {
+      "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"total\":5000012345,\"t\":\"file_offer\",\"items\":[{\"dir\":true,\"path\":\"Отчёты 2025\"},{\"path\":\"Отчёты 2025/итог.pdf\",\"size\":12345},{\"path\":\"Отчёты 2025/пустая папка\",\"dir\":true},{\"path\":\"Отчёты 2025/пустой.txt\",\"size\":0},{\"path\":\"фото 😀.jpg\",\"size\":5000000000}]}",
+      "name": "file_offer"
+    },
+    {
+      "json": "{\"id\":\"0123456789abcdef0123456789abcdef\",\"t\":\"file_get\",\"req\":7,\"index\":4,\"offset\":3000000000}",
+      "name": "file_get"
+    },
+    {
+      "json": "{\"t\":\"file_end\",\"req\":7,\"size\":2000000000}",
+      "name": "file_end"
+    },
+    {
+      "json": "{\"t\":\"file_error\",\"req\":8,\"reason\":\"changed\"}",
+      "name": "file_error"
+    },
+    {
+      "json": "{\"req\":4294967295,\"t\":\"file_cancel\"}",
+      "name": "file_cancel"
     }
   ],
   "pairing": {

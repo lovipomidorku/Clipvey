@@ -142,6 +142,18 @@ public enum ProtocolLimits {
     public static let imageCapability = "image"
     /// Допустимые mime картинок.
     public static let imageMimes: Set<String> = ["image/png", "image/jpeg"]
+    /// Возможность в caps: устройство принимает файлы.
+    public static let fileCapability = "file"
+    /// Данные двоичного куска файла — от 1 байта до 1 МиБ.
+    public static let fileChunkBytes = 1_048_576
+    /// Элементов в описании файлов — не больше.
+    public static let maxFileItems = 10_000
+    /// Сумма размеров файлов в описании — не больше 10 ГиБ.
+    public static let maxFileTotalBytes: Int64 = 10_737_418_240
+    /// Часть пути в описании — не длиннее, байт UTF-8.
+    public static let maxFileNameBytes = 255
+    /// Весь путь в описании — не длиннее, байт UTF-8.
+    public static let maxFilePathBytes = 1024
 }
 
 /// Тип устройства: необязательные поля os и form (docs/protocol.md, «Тип устройства»).
@@ -232,6 +244,17 @@ public enum WireMessage: Sendable {
     /// data = nil — поле не base64 (картинка отбрасывается, сеанс продолжается).
     case blobChunk(id: String, seq: Int, data: Data?)
     case blobEnd(id: String)
+    /// Описание файлов (проверено: см. FileOffer.refusal).
+    case fileOffer(FileOffer)
+    /// Запрос содержимого. index и offset — −1, если поля нет или оно неверное (ответ not_found).
+    case fileGet(id: String, req: UInt32, index: Int, offset: Int64)
+    case fileEnd(req: UInt32, size: Int64)
+    case fileError(req: UInt32, reason: String)
+    case fileCancel(req: UInt32)
+    /// Двоичный кусок файла: шифрованный кадр, открытый текст которого начинается с 0x00. data — срез без копии.
+    case fileChunk(req: UInt32, data: Data)
+    /// Сообщение о файлах (или двоичный кадр) не прошло проверку: пишется в журнал и пропускается, сеанс продолжается.
+    case invalidFileMessage(type: String, reason: String)
     case ping
     case pong
     case unknown(String)
@@ -254,13 +277,24 @@ public enum WireMessage: Sendable {
         case .blobStart: "blob_start"
         case .blobChunk: "blob_chunk"
         case .blobEnd: "blob_end"
+        case .fileOffer: "file_offer"
+        case .fileGet: "file_get"
+        case .fileEnd: "file_end"
+        case .fileError: "file_error"
+        case .fileCancel: "file_cancel"
+        case .fileChunk: "file_chunk"
+        case .invalidFileMessage(let type, _): type
         case .ping: "ping"
         case .pong: "pong"
         case .unknown(let type): type
         }
     }
 
+    /// Открытый текст сообщения: JSON в UTF-8, у двоичного куска — `00 ‖ req ‖ данные`.
     public func encode() -> Data {
+        if case .fileChunk(let req, let data) = self {
+            return FileChunk.plaintext(req: req, data: data)
+        }
         var object: [String: Any] = ["t": type]
         func put(_ deviceType: DeviceType) {
             if let os = deviceType.os { object["os"] = os }
@@ -311,11 +345,38 @@ public enum WireMessage: Sendable {
             object["data"] = (data ?? Data()).base64EncodedString()
         case .blobEnd(let id):
             object["id"] = id
-        case .pairVerified, .pairDone, .ping, .pong, .unknown:
+        case .fileOffer(let offer):
+            object["id"] = offer.id
+            object["items"] = offer.jsonItems()
+            object["total"] = offer.total
+        case .fileGet(let id, let req, let index, let offset):
+            object["id"] = id
+            object["req"] = req
+            object["index"] = index
+            object["offset"] = offset
+        case .fileEnd(let req, let size):
+            object["req"] = req
+            object["size"] = size
+        case .fileError(let req, let reason):
+            object["req"] = req
+            object["reason"] = reason
+        case .fileCancel(let req):
+            object["req"] = req
+        case .pairVerified, .pairDone, .ping, .pong, .unknown, .fileChunk, .invalidFileMessage:
             break
         }
         // Словарь из строк, чисел и массивов строк всегда сериализуется.
         return (try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes])) ?? Data()
+    }
+
+    /// Открытый текст шифрованного кадра сеанса: 0x00 в начале — двоичный кусок файла, иначе JSON.
+    /// До шифрования двоичных кадров нет: там — decode.
+    public static func decodeSession(_ plaintext: Data) throws -> WireMessage {
+        guard plaintext.first == 0 else { return try decode(plaintext) }
+        switch FileChunk.parse(plaintext) {
+        case .success(let chunk): return .fileChunk(req: chunk.req, data: chunk.data)
+        case .failure(let error): return .invalidFileMessage(type: "file_chunk", reason: error.reason)
+        }
     }
 
     public static func decode(_ data: Data) throws -> WireMessage {
@@ -390,9 +451,40 @@ public enum WireMessage: Sendable {
                 seq: integer("seq") ?? -1,
                 data: (object["data"] as? String).flatMap { Data(base64Encoded: $0) })
         case "blob_end": return .blobEnd(id: try string("id"))
+        case "file_offer", "file_get", "file_end", "file_error", "file_cancel":
+            return decodeFileMessage(type, object)
         case "ping": return .ping
         case "pong": return .pong
         default: return .unknown(type)
+        }
+    }
+
+    /// Сообщения о файлах не рвут сеанс: неверное — .invalidFileMessage.
+    private static func decodeFileMessage(_ type: String, _ object: [String: Any]) -> WireMessage {
+        if type == "file_offer" {
+            switch FileOffer.parse(object) {
+            case .success(let offer): return .fileOffer(offer)
+            case .failure(let error): return .invalidFileMessage(type: type, reason: error.reason)
+            }
+        }
+        guard let rawReq = JSONNumbers.integer(object["req"]), (1...Int64(UInt32.max)).contains(rawReq) else {
+            return .invalidFileMessage(type: type, reason: "req не целое от 1 до 4294967295")
+        }
+        let req = UInt32(rawReq)
+        switch type {
+        case "file_get":
+            let index = JSONNumbers.integer(object["index"]).flatMap { $0 >= 0 && $0 <= Int64(Int32.max) ? Int($0) : nil } ?? -1
+            let offset = JSONNumbers.integer(object["offset"]).flatMap { $0 >= 0 ? $0 : nil } ?? -1
+            return .fileGet(id: (object["id"] as? String) ?? "", req: req, index: index, offset: offset)
+        case "file_end":
+            guard let size = JSONNumbers.integer(object["size"]), size >= 0 else {
+                return .invalidFileMessage(type: type, reason: "size не целое ≥ 0")
+            }
+            return .fileEnd(req: req, size: size)
+        case "file_error":
+            return .fileError(req: req, reason: (object["reason"] as? String) ?? "unavailable")
+        default:
+            return .fileCancel(req: req)
         }
     }
 
