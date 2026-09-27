@@ -21,7 +21,7 @@ Build from source: `mac/scripts/build.sh --install`, `windows/publish.sh`.
 2. A new device only needs to be paired with one of the others: data is relayed along the chain.
 3. The switch next to a device pauses syncing; "Unpair" removes the pairing.
 
-Copied files and folders up to the "Download automatically" size (50 MB by default) can be pasted right away. Larger ones are downloaded when you click "Download" in the pop-up (saved to Downloads → Clipvey). "Download automatically" is shared: changing it on one device changes it on all paired devices.
+Copied files and folders up to the "Download automatically" size (50 MB by default) can be pasted right away (if that takes more than a moment, a small pop-up shows the progress and then "Done — ready to paste"). Larger ones are downloaded when you click "Download" in the pop-up (saved to Downloads → Clipvey). "Download automatically" is shared: changing it on one device changes it on all paired devices.
 
 In the settings: interface language, this computer's name, local names for other devices, "Sync images", "Sync files", "Download automatically", automatic update checks (daily, installed only after you confirm).
 
