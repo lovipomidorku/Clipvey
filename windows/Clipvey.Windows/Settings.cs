@@ -17,7 +17,7 @@ internal enum AppLanguage
 /// Автозапуск хранится не здесь, а в реестре (Autostart).
 internal static class AppSettings
 {
-    private static readonly string FilePath = Path.Combine(AppPaths.DataDirectory, "settings.json");
+    private static string FilePath => Path.Combine(AppPaths.DataDirectory, "settings.json");
     private static JsonObject? _data;
 
     public static AppLanguage Language

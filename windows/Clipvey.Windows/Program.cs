@@ -11,6 +11,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // Первым делом: в режиме проверки (--test --data DIR) все пути, мьютекс и события — свои.
+        AppPaths.Configure(args);
         // Режим установщика обновления: заменить exe и запустить его, без интерфейса и мьютекса.
         if (args.Contains(UpdaterOptions.FinishUpdateFlag))
         {
@@ -19,12 +21,18 @@ internal static class Program
         }
         UpdaterOptions.Load(args);
         Theme.Load(args);
-        using var mutex = new Mutex(initiallyOwned: true, @"Local\Clipvey", out var isFirstInstance);
+        using var mutex = new Mutex(initiallyOwned: true, AppPaths.InstanceName, out var isFirstInstance);
         // Запуск после обновления: старая версия ещё завершается и держит мьютекс.
         if (!isFirstInstance && UpdaterOptions.Current.AfterUpdate)
             isFirstInstance = WaitForPreviousInstance(mutex);
         if (!isFirstInstance)
         {
+            // Режим проверки: --quit завершает работающую копию штатно (значок убирается, буфер очищается).
+            if (AppPaths.IsolatedTest && args.Contains("--quit"))
+            {
+                TrayApplication.SignalQuit();
+                return;
+            }
             // Повторный запуск открывает панель уже работающей копии (например, если значок спрятан в трее).
             if (TrayApplication.SignalShowPanel())
                 return;
@@ -35,6 +43,8 @@ internal static class Program
         }
 
         FileLog.Start();
+        if (AppPaths.IsolatedTest)
+            Core.Log.Write($"Режим проверки: данные в {AppPaths.DataDirectory}");
         Updater.RemoveLeftovers();
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Core.Log.Write($"Необработанная ошибка: {e.ExceptionObject}");
 
@@ -65,6 +75,8 @@ internal static class Program
         app.Startup += (_, _) =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
+            // Виртуальные файлы кладутся в буфер через OleSetClipboard — с этого (STA) потока, с его циклом сообщений.
+            OleClipboard.Initialize();
             try
             {
                 tray = new TrayApplication();

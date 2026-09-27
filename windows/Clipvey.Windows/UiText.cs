@@ -24,6 +24,48 @@ internal static class UiText
         _ => L("Ошибка обмена с другим устройством", "Communication error with the other device"),
     };
 
+    /// Почему файлы не отправлены — коротко, для окошка.
+    public static string OfferFailure(FileOfferFailure failure) => failure switch
+    {
+        FileOfferFailure.Empty => L("Нечего отправлять: ярлыки-ссылки и особые файлы не передаются",
+            "Nothing to send: symbolic links and special files aren’t shared"),
+        FileOfferFailure.TooManyItems => L("Больше 10 000 файлов и папок", "More than 10,000 files and folders"),
+        FileOfferFailure.TooLarge => L("Всего больше 10 ГБ", "More than 10 GB in total"),
+        FileOfferFailure.NameTooLong => L("Слишком длинное имя или путь", "A name or path is too long"),
+        FileOfferFailure.Disabled => L("Передача файлов выключена", "File sharing is off"),
+        _ => L("Не удалось прочитать файлы", "Couldn’t read the files"),
+    };
+
+    /// Почему файлы не получены (или вставка прервана) — коротко, для окошка. from — имя устройства-источника.
+    public static string TransferFailure(FileTransferFailure? failure, string from) => failure switch
+    {
+        FileTransferFailure.DeviceUnavailable => L($"«{from}» недоступно — связь прервалась", $"“{from}” is unavailable — the connection was lost"),
+        FileTransferFailure.NotFound => L($"На «{from}» этих файлов уже нет — скопируйте их снова",
+            $"These files are no longer available on “{from}”. Copy them again"),
+        FileTransferFailure.Changed => L($"Файл на «{from}» изменился после копирования — скопируйте снова",
+            $"A file on “{from}” changed after it was copied. Copy it again"),
+        FileTransferFailure.Unavailable => L($"«{from}» не смогло прочитать файл", $"“{from}” couldn’t read a file"),
+        FileTransferFailure.WriteFailed => L("Не удалось записать файл на диск", "Couldn’t write a file to disk"),
+        FileTransferFailure.ProtocolError => L("Файлы пришли с ошибкой", "The files arrived damaged"),
+        FileTransferFailure.Cancelled => L("Отменено", "Cancelled"),
+        _ => L("Вставка не завершена", "The paste didn’t finish"),
+    };
+
+    /// «12,3 МБ» — размер для окошка. Как в Проводнике: 1 КБ = 1024 байта.
+    public static string Size(long bytes)
+    {
+        string[] units = [L("Б", "B"), L("КБ", "KB"), L("МБ", "MB"), L("ГБ", "GB")];
+        double value = bytes;
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        var format = unit == 0 || value >= 100 ? "0" : "0.0";
+        return $"{value.ToString(format, System.Globalization.CultureInfo.CurrentCulture)} {units[unit]}";
+    }
+
     /// «Последняя синхронизация: 11:03 · текст от OFFICE-PC» / «… 11:05 · картинка отправлена».
     public static string LastSync(LastSync? sync)
     {
@@ -34,6 +76,8 @@ internal static class UiText
         {
             (SyncKind.Image, { } from) => L($"картинка от {from}", $"image from {from}"),
             (SyncKind.Image, null) => L("картинка отправлена", "image sent"),
+            (SyncKind.Files, { } from) => L($"файлы от {from}", $"files from {from}"),
+            (SyncKind.Files, null) => L("файлы отправлены", "files sent"),
             (_, { } from) => L($"текст от {from}", $"text from {from}"),
             _ => L("текст отправлен", "text sent"),
         };

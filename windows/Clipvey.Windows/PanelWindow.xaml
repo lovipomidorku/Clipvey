@@ -312,6 +312,16 @@
                                           AutomationProperties.AutomationId="images" Click="OnImagesClick" />
                         </Grid>
 
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="FilesText" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <ToggleButton x:Name="FilesSwitch" Grid.Column="1" Style="{StaticResource Switch}" Margin="12,0,0,0"
+                                          AutomationProperties.AutomationId="files" Checked="OnFilesChanged" Unchecked="OnFilesChanged" />
+                        </Grid>
+
 
                         <Grid Margin="0,14,0,0">
                             <Grid.ColumnDefinitions>

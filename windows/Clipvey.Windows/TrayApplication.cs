@@ -10,11 +10,12 @@ using Forms = System.Windows.Forms;
 
 namespace Clipvey.Windows;
 
-/// Что передано: текст или картинка.
+/// Что передано: текст, картинка или файлы.
 internal enum SyncKind
 {
     Text,
     Image,
+    Files,
 }
 
 /// Последняя синхронизация: когда, откуда (From — имя устройства; null — отправлено отсюда) и что.
@@ -35,6 +36,8 @@ internal sealed class TrayApplication
     private TrayState? _trayState;
     private readonly SynchronizationContext _ui;
     private PanelWindow? _panel;
+    private ToastWindow? _toast;
+    private readonly FileTransfers _files;
     private readonly Updater _updater;
 
     /// Меню значка. Строится при каждом открытии — так в нём всегда текущие язык, автозапуск и состояние.
@@ -61,9 +64,15 @@ internal sealed class TrayApplication
         var form = Forms.SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(Forms.BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
         _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
             deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled, filesEnabled: AppSettings.FilesEnabled);
-        _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage,
+        _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage, OnLocalFiles,
+            onLocalChange: () => _files?.CancelDownload("в буфере новое содержимое"),
             shouldRead: () => _node.Devices.Any(device => device.Connected),
-            shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages));
+            shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages),
+            shouldReadFiles: () => _node.FilesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsFiles));
+        _files = new FileTransfers(_node, _watcher, () => Toast, NoteSync, _ui);
+        FileTransfers.CleanCache();
+        if (AppPaths.ProbePath is { } probe)
+            FileTransfers.Probe(probe);
 
         _tray = new Forms.NotifyIcon
         {
@@ -87,14 +96,17 @@ internal sealed class TrayApplication
 
         _node.ClipReceived += (text, from) => OnUi(() =>
         {
+            _files.CancelDownload("пришёл текст");
             _watcher.WriteRemote(text);
             NoteSync(new LastSync(DateTime.Now, from, SyncKind.Text));
         });
         _node.ImageReceived += (data, mime, from) => OnUi(() =>
         {
+            _files.CancelDownload("пришла картинка");
             _watcher.WriteRemoteImage(data, mime);
             NoteSync(new LastSync(DateTime.Now, from, SyncKind.Image));
         });
+        _node.FileOffered += received => OnUi(() => _files.Receive(received));
         _node.Changed += () => OnUi(Refresh);
         _node.IncomingPairingChanged += incoming => OnUi(() =>
         {
@@ -140,11 +152,13 @@ internal sealed class TrayApplication
         _node.SetImagesEnabled(enabled);
     }
 
-    /// «Передавать файлы»: сохранить и передать узлу. Переключателя в интерфейсе пока нет.
+    /// «Передавать файлы»: сохранить и передать узлу. Выключено — незаконченное фоновое скачивание отменяется.
     public void SetFilesEnabled(bool enabled)
     {
         AppSettings.FilesEnabled = enabled;
         _node.SetFilesEnabled(enabled);
+        if (!enabled)
+            _files.CancelDownload("передача файлов выключена");
     }
 
     /// Открыть режим связывания (из панели и из меню значка) и запомнить срок для обратного отсчёта.
@@ -263,6 +277,8 @@ internal sealed class TrayApplication
             NoteSync(new LastSync(DateTime.Now, From: null, SyncKind.Text));
     }
 
+    private void OnLocalFiles(IReadOnlyList<string> paths) => _files.Send(paths);
+
     private void OnLocalImage(byte[] data, string mime)
     {
         if (_node.SendImage(data, mime) > 0)
@@ -279,6 +295,9 @@ internal sealed class TrayApplication
 
     private void Refresh()
     {
+        // После выхода узел ещё сообщает о закрытых сеансах, а значка уже нет.
+        if (_quitting)
+            return;
         var devices = _node.Devices;
         var connected = devices.Count(device => device.Connected);
         var status = devices.Count == 0
@@ -309,7 +328,8 @@ internal sealed class TrayApplication
     // MARK: - Повторный запуск
 
     /// Имя события «открой панель»: его взводит повторный запуск Clipvey.exe.
-    private const string ShowPanelEventName = @"Local\Clipvey.ShowPanel";
+    /// У копии для проверок (--test --data) имя своё, как и у мьютекса.
+    private static string ShowPanelEventName => AppPaths.InstanceName + ".ShowPanel";
     private EventWaitHandle? _showPanelEvent;
     private RegisteredWaitHandle? _showPanelWait;
 
@@ -337,10 +357,32 @@ internal sealed class TrayApplication
             _showPanelEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowPanelEventName);
             _showPanelWait = ThreadPool.RegisterWaitForSingleObject(_showPanelEvent,
                 (_, _) => OnUi(ShowPanel), null, Timeout.Infinite, executeOnlyOnce: false);
+            if (AppPaths.IsolatedTest)
+            {
+                _quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
+                _quitWait = ThreadPool.RegisterWaitForSingleObject(_quitEvent, (_, _) => OnUi(Quit), null, Timeout.Infinite, executeOnlyOnce: true);
+            }
         }
         catch (Exception e)
         {
             Log.Write($"Не удалось подписаться на повторный запуск: {e.Message}");
+        }
+    }
+
+    /// Режим проверки: «завершись» от повторного запуска с --quit.
+    private static string QuitEventName => AppPaths.InstanceName + ".Quit";
+    private EventWaitHandle? _quitEvent;
+    private RegisteredWaitHandle? _quitWait;
+
+    public static void SignalQuit()
+    {
+        try
+        {
+            using var signal = EventWaitHandle.OpenExisting(QuitEventName);
+            signal.Set();
+        }
+        catch (Exception e) when (e is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -356,9 +398,17 @@ internal sealed class TrayApplication
 
     private void ShowPanel(bool settings)
     {
-        _panel ??= new PanelWindow(this);
+        if (_panel is null)
+        {
+            _panel = new PanelWindow(this);
+            // Окошко не закрывает панель: при её появлении и скрытии встаёт заново (после того, как встанет панель).
+            _panel.IsVisibleChanged += (_, _) => Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => _toast?.Reposition());
+        }
         _panel.ShowPanel(settings);
     }
+
+    /// Всплывающее окошко (прогресс, «Готово», ошибки) — одно на программу, создаётся при первом сообщении.
+    private ToastWindow Toast => _toast ??= new ToastWindow(() => _panel is { IsVisible: true } panel ? panel.ScreenBounds : null);
 
     /// Левый клик по значку: открыть панель или закрыть открытую.
     /// Нажатие на значок само снимает фокус с панели, и она прячется раньше, чем придёт клик, —
@@ -378,16 +428,25 @@ internal sealed class TrayApplication
         ShowPanel();
     }
 
+    private bool _quitting;
+
     private void Quit()
     {
+        if (_quitting)
+            return;
+        _quitting = true;
         _showPanelWait?.Unregister(null);
         _showPanelEvent?.Dispose();
+        _quitWait?.Unregister(null);
+        _quitEvent?.Dispose();
         Localization.Changed -= OnLanguageChanged;
         Theme.Stop();
         _tray.Visible = false;
         _tray.Dispose();
         _icons.Dispose();
+        _files.Shutdown();
         _watcher.Dispose();
+        _toast?.CloseToast();
         _updater.Dispose();
         _panel?.ClosePanel();
         _menuOwner?.Dispose();

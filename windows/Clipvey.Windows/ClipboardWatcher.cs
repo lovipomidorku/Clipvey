@@ -7,15 +7,19 @@ using Clipvey.Core;
 
 namespace Clipvey.Windows;
 
-/// Следит за буфером обмена Windows (AddClipboardFormatListener) и записывает в него текст и картинки с других устройств.
-/// Работает на потоке интерфейса: буфер открывается им же (OpenClipboard с окном-наблюдателем).
+/// Следит за буфером обмена Windows (AddClipboardFormatListener) и записывает в него текст, картинки и файлы
+/// с других устройств. Работает на потоке интерфейса: буфер открывается им же (OpenClipboard с окном-наблюдателем).
 /// Перевод картинок (DIB → PNG, PNG/JPEG → DIB) идёт в фоне, чтобы большие картинки не подвешивали интерфейс.
 ///
 /// Что отправляется (docs/protocol.md, «Поведение сторон»):
 /// - ничего, если в буфере маркер ClipveyRemote (записано нами) или формат «секретного» содержимого;
+/// - файлы и папки (CF_HDROP) — если файлы можно отправлять: они важнее текста и картинок;
 /// - картинка — если картинки можно отправлять и текста нет или это одна ссылка;
 ///   формат PNG как есть, иначе CF_DIBV5 / CF_DIB, переведённый в PNG;
 /// - иначе текст.
+///
+/// Файлы с другого устройства: небольшие — настоящие (CF_HDROP на скачанное), большие — «виртуальные»
+/// (свой IDataObject через OleSetClipboard, VirtualFiles.cs).
 internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 {
     private const int WmClipboardUpdate = 0x031D;
@@ -23,10 +27,11 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 
     private const uint CfUnicodeText = 13;
     private const uint CfDib = 8;
+    private const uint CfHdrop = 15;
     private const uint CfDibV5 = 17;
 
     /// Отметка «пришло с другого устройства»: такое содержимое не отправляется обратно.
-    private const string RemoteFormatName = "ClipveyRemote";
+    public const string RemoteFormatName = "ClipveyRemote";
 
     /// Так менеджеры паролей и системные программы просят не передавать содержимое буфера.
     private static readonly string[] SecretFormatNames = ["ExcludeClipboardContentFromMonitorProcessing", "Clipboard Viewer Ignore"];
@@ -38,24 +43,36 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     private readonly uint[] _secretFormats = [.. SecretFormatNames.Select(Register)];
     private readonly uint _pngFormat = Register("PNG");
     private readonly uint _jfifFormat = Register("JFIF");
+    private readonly uint _dropEffectFormat = Register("Preferred DropEffect");
 
     private readonly Action<string> _onCopy;
     private readonly Action<byte[], string> _onCopyImage;
+    private readonly Action<IReadOnlyList<string>> _onCopyFiles;
+    private readonly Action _onLocalChange;
     private readonly Func<bool> _shouldRead;
     private readonly Func<bool> _shouldReadImages;
+    private readonly Func<bool> _shouldReadFiles;
     private readonly SynchronizationContext _ui;
 
     /// Номер последней записи с другого устройства: запись картинки после перевода отменяется, если есть новее.
     private int _writeGeneration;
 
-    /// onCopy — скопирован текст (переводы строк \n); onCopyImage — картинка (PNG или JPEG, до 20 МиБ).
-    /// shouldRead — есть ли кому отправлять; shouldReadImages — есть ли кому отправлять картинки.
-    public ClipboardWatcher(Action<string> onCopy, Action<byte[], string> onCopyImage, Func<bool> shouldRead, Func<bool> shouldReadImages)
+    /// Виртуальные файлы, которые мы положили в буфер (OleSetClipboard): ссылку держим сами, пока они там.
+    private VirtualFileDataObject? _virtualFiles;
+
+    /// onCopy — скопирован текст (переводы строк \n); onCopyImage — картинка (PNG или JPEG, до 20 МиБ);
+    /// onCopyFiles — файлы и папки (полные пути). onLocalChange — в буфере что-то не наше (любое изменение).
+    /// shouldRead — есть ли кому отправлять; shouldReadImages и shouldReadFiles — есть ли кому отправлять картинки и файлы.
+    public ClipboardWatcher(Action<string> onCopy, Action<byte[], string> onCopyImage, Action<IReadOnlyList<string>> onCopyFiles,
+        Action onLocalChange, Func<bool> shouldRead, Func<bool> shouldReadImages, Func<bool> shouldReadFiles)
     {
         _onCopy = onCopy;
         _onCopyImage = onCopyImage;
+        _onCopyFiles = onCopyFiles;
+        _onLocalChange = onLocalChange;
         _shouldRead = shouldRead;
         _shouldReadImages = shouldReadImages;
+        _shouldReadFiles = shouldReadFiles;
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         CreateHandle(new CreateParams { Parent = MessageOnlyParent });
         if (!AddClipboardFormatListener(Handle))
@@ -114,6 +131,61 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             formats.Add((_remoteFormat, "1"u8.ToArray()));
             _ = WriteFormatsAsync(formats, generation, $"картинка {mime}, {data.Length} байт{(dib is null ? ", без DIB" : "")}");
         }, null), TaskScheduler.Default);
+    }
+
+    /// Номер содержимого буфера (GetClipboardSequenceNumber): меняется при каждой записи.
+    public static uint Sequence => GetClipboardSequenceNumber();
+
+    /// Записать скачанные файлы с другого устройства: CF_HDROP (пути элементов верхнего уровня),
+    /// Preferred DropEffect «копирование» и маркер. sequence — номер буфера, когда пришло описание:
+    /// если буфер с тех пор изменился (скопировали что-то новее), файлы не записываются.
+    public bool WriteRemoteFiles(IReadOnlyList<string> paths, uint sequence)
+    {
+        if (GetClipboardSequenceNumber() != sequence)
+        {
+            Log.Write("Файлы не записаны в буфер: пока они скачивались, буфер изменился");
+            return false;
+        }
+        var generation = ++_writeGeneration;
+        List<(uint Format, byte[] Data)> formats =
+        [
+            (CfHdrop, DropFiles(paths)),
+            (_dropEffectFormat, BitConverter.GetBytes(1)), // DROPEFFECT_COPY
+            (_remoteFormat, "1"u8.ToArray()),
+        ];
+        _ = WriteFormatsAsync(formats, generation, $"файлы — элементов верхнего уровня: {paths.Count}", sequence);
+        return true;
+    }
+
+    /// DROPFILES: pFiles = 20, pt, fNC, fWide = 1; затем пути в UTF-16, каждый с \0, и ещё один \0 в конце.
+    private static byte[] DropFiles(IReadOnlyList<string> paths)
+    {
+        var text = string.Concat(paths.Select(path => path + "\0")) + "\0";
+        var data = new byte[20 + Encoding.Unicode.GetByteCount(text)];
+        BitConverter.TryWriteBytes(data.AsSpan(0), 20);
+        BitConverter.TryWriteBytes(data.AsSpan(16), 1);
+        Encoding.Unicode.GetBytes(text, data.AsSpan(20));
+        return data;
+    }
+
+    /// Положить в буфер виртуальные файлы (большие, скачиваются при вставке). Поток интерфейса.
+    public bool PlaceVirtualFiles(VirtualFileDataObject data)
+    {
+        ++_writeGeneration;
+        if (!OleClipboard.Set(data))
+            return false;
+        _virtualFiles = data;
+        return true;
+    }
+
+    /// При выходе: если в буфере ещё наши виртуальные файлы — убрать их (вставить их без программы нельзя).
+    public void ReleaseVirtualFiles()
+    {
+        if (_virtualFiles is not { } data)
+            return;
+        data.CancelPaste();
+        OleClipboard.ClearIfCurrent(data);
+        _virtualFiles = null;
     }
 
     /// Перевести PNG/JPEG в CF_DIB через GDI+. null — не удалось (причина в журнале).
@@ -179,7 +251,8 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     }
 
     /// Положить форматы в буфер одной записью. Буфер может быть занят другой программой — повторяем, не блокируя интерфейс.
-    private async Task WriteFormatsAsync(List<(uint Format, byte[] Data)> formats, int generation, string description)
+    /// sequence — записывать, только если буфер с тех пор не менялся (null — не проверять).
+    private async Task WriteFormatsAsync(List<(uint Format, byte[] Data)> formats, int generation, string description, uint? sequence = null)
     {
         for (var attempt = 0; attempt < 10; attempt++)
         {
@@ -189,6 +262,11 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             {
                 try
                 {
+                    if (sequence is { } expected && GetClipboardSequenceNumber() != expected)
+                    {
+                        Log.Write($"Не записано в буфер ({description}): буфер изменился");
+                        return;
+                    }
                     if (!EmptyClipboard())
                     {
                         Log.Write($"Не удалось очистить буфер (ошибка {Marshal.GetLastWin32Error()})");
@@ -204,7 +282,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
                 {
                     CloseClipboard();
                 }
-                Log.Write($"Записана в буфер {description}: {string.Join(", ", formats.Select(f => FormatName(f.Format)))}");
+                Log.Write($"{(formats[0].Format == CfHdrop ? "Записаны" : "Записана")} в буфер {description} ({string.Join(", ", formats.Select(f => FormatName(f.Format)))})");
                 return;
             }
             await Task.Delay(50);
@@ -255,15 +333,20 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         base.WndProc(ref m);
     }
 
-    /// Что взять из буфера: текст или исходные данные картинки (PNG либо DIB).
-    private sealed record Snapshot(string? Text, byte[]? Image, uint ImageFormat, string Formats);
+    /// Что взять из буфера: текст, исходные данные картинки (PNG либо DIB) или пути файлов.
+    private sealed record Snapshot(string? Text, byte[]? Image, uint ImageFormat, string Formats, IReadOnlyList<string>? Files = null);
 
     private void OnClipboardUpdate()
     {
+        // Любое не наше изменение — новое содержимое: незаконченное скачивание файлов больше не нужно.
+        // IsClipboardFormatAvailable не открывает буфер.
+        if (!IsClipboardFormatAvailable(_remoteFormat))
+            _onLocalChange();
         if (!_shouldRead())
             return;
         // До открытия буфера: пока он открыт, другие программы ждут.
         var wantImages = _shouldReadImages();
+        var wantFiles = _shouldReadFiles();
         // Программа-источник может ещё держать буфер открытым — пробуем несколько раз.
         Snapshot? snapshot = null;
         var opened = false;
@@ -280,7 +363,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         }
         try
         {
-            snapshot = ReadOpened(wantImages);
+            snapshot = ReadOpened(wantImages, wantFiles);
         }
         finally
         {
@@ -289,6 +372,11 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         if (snapshot is null)
             return;
 
+        if (snapshot.Files is { Count: > 0 } files)
+        {
+            _onCopyFiles(files);
+            return;
+        }
         if (snapshot.Image is { } image)
         {
             SendImage(image, snapshot.ImageFormat, snapshot.Formats);
@@ -299,8 +387,8 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     }
 
     /// Буфер открыт. Сначала только список форматов и текст: картинку запрашиваем, лишь если отправлять будем её —
-    /// Word и Excel рисуют картинку по запросу, и это долго.
-    private Snapshot? ReadOpened(bool wantImages)
+    /// Word и Excel рисуют картинку по запросу, и это долго. Файлы (CF_HDROP) важнее всего остального.
+    private Snapshot? ReadOpened(bool wantImages, bool wantFiles)
     {
         var formats = new List<uint>();
         for (uint format = 0; (format = EnumClipboardFormats(format)) != 0;)
@@ -311,6 +399,20 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         {
             Log.Write("Секретное содержимое (пароль) не передаётся");
             return null;
+        }
+        if (formats.Contains(CfHdrop))
+        {
+            if (wantFiles)
+            {
+                var paths = ReadDropFiles();
+                if (paths.Count > 0)
+                    return new Snapshot(null, null, 0, "", paths);
+                Log.Write("Не удалось прочитать список файлов из буфера");
+            }
+            else
+            {
+                Log.Write("Файлы из буфера не отправлены: передача файлов выключена или их некому отправить");
+            }
         }
 
         var text = formats.Contains(CfUnicodeText) ? ReadText() : null;
@@ -396,6 +498,26 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             return;
         }
         _onCopyImage(data, mime);
+    }
+
+    /// Пути из CF_HDROP (буфер открыт).
+    private static List<string> ReadDropFiles()
+    {
+        var result = new List<string>();
+        var handle = GetClipboardData(CfHdrop);
+        if (handle == IntPtr.Zero)
+            return result;
+        var count = DragQueryFile(handle, uint.MaxValue, null, 0);
+        for (uint i = 0; i < count; i++)
+        {
+            var length = DragQueryFile(handle, i, null, 0);
+            if (length == 0)
+                continue;
+            var path = new StringBuilder((int)length + 1);
+            if (DragQueryFile(handle, i, path, (uint)path.Capacity) > 0)
+                result.Add(path.ToString());
+        }
+        return result;
     }
 
     private static string? ReadText()
@@ -506,6 +628,12 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 
     [DllImport("user32.dll")]
     private static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
+    private static extern bool IsClipboardFormatAvailable(uint format);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, EntryPoint = "DragQueryFileW")]
+    private static extern uint DragQueryFile(IntPtr drop, uint index, StringBuilder? file, uint size);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "RegisterClipboardFormatW")]
     private static extern uint RegisterClipboardFormat(string name);

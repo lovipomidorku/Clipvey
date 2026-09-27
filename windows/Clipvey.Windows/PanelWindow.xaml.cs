@@ -237,6 +237,10 @@ internal sealed partial class PanelWindow : Window
         Close();
     }
 
+    /// Прямоугольник панели на экране в физических пикселях (null — окна ещё нет).
+    public System.Drawing.Rectangle? ScreenBounds =>
+        _hwnd != IntPtr.Zero && GetWindowRect(_hwnd, out var rect) ? System.Drawing.Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom) : null;
+
     /// Поставить панель в угол у области уведомлений. Размер окна — из GetWindowRect (физические пиксели).
     private void Place()
     {
@@ -782,6 +786,10 @@ internal sealed partial class PanelWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(ImagesSwitch, ImagesText.Text);
         ImagesSwitch.IsChecked = Node.ImagesEnabled;
 
+        FilesText.Text = L("Передавать файлы", "Share files");
+        System.Windows.Automation.AutomationProperties.SetName(FilesSwitch, FilesText.Text);
+        FilesSwitch.IsChecked = Node.FilesEnabled;
+
         LanguageText.Text = L("Язык", "Language");
         System.Windows.Automation.AutomationProperties.SetName(LanguageBox, LanguageText.Text);
         if (_languageListRussian != IsRussian || LanguageBox.Items.Count == 0)
@@ -799,6 +807,14 @@ internal sealed partial class PanelWindow : Window
         AutostartSwitch.IsChecked = Autostart.SafeSet(AutostartSwitch.IsChecked == true);
 
     private void OnImagesClick(object sender, RoutedEventArgs e) => _app.SetImagesEnabled(ImagesSwitch.IsChecked == true);
+
+    /// По Checked/Unchecked, а не Click: так срабатывает и переключение через UI Automation (экранный диктор).
+    /// Программная установка в RefreshSettings идёт под _updating и не считается действием пользователя.
+    private void OnFilesChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_updating)
+            _app.SetFilesEnabled(FilesSwitch.IsChecked == true);
+    }
 
     private void OnLanguageSelected(object sender, SelectionChangedEventArgs e)
     {

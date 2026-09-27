@@ -7,15 +7,49 @@ using Clipvey.Core;
 
 namespace Clipvey.Windows;
 
+/// Где программа хранит данные. В режиме проверки (--test --data DIR) всё — в DIR, и копия не пересекается
+/// с рабочей: свои ключ, устройства, настройки, журнал, полученные файлы, мьютекс и событие показа панели.
+/// Configure вызывается первым делом в Main, до любого обращения к настройкам.
 internal static class AppPaths
 {
-    /// %APPDATA%\Clipvey: ключ устройства и список связанных устройств.
-    public static string DataDirectory { get; } =
+    /// %APPDATA%\Clipvey: ключ устройства, список связанных устройств, настройки.
+    public static string DataDirectory { get; private set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Clipvey");
 
     /// %LOCALAPPDATA%\Clipvey\clipvey.log: журнал для диагностики.
-    public static string LogFile { get; } =
+    public static string LogFile { get; private set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Clipvey", "clipvey.log");
+
+    /// %LOCALAPPDATA%\Clipvey\Incoming: небольшие полученные файлы (IncomingCache), старше суток удаляются.
+    public static string IncomingDirectory { get; private set; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Clipvey", "Incoming");
+
+    /// Режим проверки со своей папкой данных (--test --data DIR).
+    public static bool IsolatedTest { get; private set; }
+
+    /// Имя мьютекса «уже запущен» и приставка имён событий: у копии для проверок — свои.
+    public static string InstanceName { get; private set; } = @"Local\Clipvey";
+
+    /// Режим проверки: --probe ПУТЬ — после запуска обойти ПУТЬ так же, как при отправке файлов (только имена,
+    /// размеры и атрибуты, без чтения содержимого), и записать итог в журнал. Ничего не отправляется.
+    public static string? ProbePath { get; private set; }
+
+    public static void Configure(string[] args)
+    {
+        var index = Array.IndexOf(args, "--data");
+        if (!args.Contains("--test") || index < 0 || index + 1 >= args.Length)
+            return;
+        var directory = Path.GetFullPath(args[index + 1]);
+        IsolatedTest = true;
+        DataDirectory = directory;
+        LogFile = Path.Combine(directory, "clipvey.log");
+        IncomingDirectory = Path.Combine(directory, "Incoming");
+        var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(directory.ToLowerInvariant())))[..12];
+        InstanceName = $@"Local\Clipvey.Test.{hash}";
+        var probe = Array.IndexOf(args, "--probe");
+        if (probe >= 0 && probe + 1 < args.Length)
+            ProbePath = args[probe + 1];
+    }
 }
 
 /// Ключ устройства, зашифрованный DPAPI: прочитать его может только эта учётная запись на этом компьютере.
@@ -95,6 +129,12 @@ internal static class Autostart
 
     public static void Set(bool enabled)
     {
+        // Копия для проверок не должна прописывать себя (или убирать рабочую копию) в автозапуск.
+        if (AppPaths.IsolatedTest)
+        {
+            Log.Write($"Автозапуск в режиме проверки не меняется (просили {(enabled ? "включить" : "выключить")})");
+            return;
+        }
         using var key = Registry.CurrentUser.CreateSubKey(RunKey);
         if (enabled)
             key.SetValue(ValueName, $"\"{Environment.ProcessPath}\"");
