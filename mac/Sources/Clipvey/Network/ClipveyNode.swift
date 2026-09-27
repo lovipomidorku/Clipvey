@@ -475,9 +475,9 @@ final class ClipveyNode {
 
     private func startListener(port: NWEndpoint.Port) {
         do {
-            let parameters = NWParameters.tcp
+            // Принятые соединения получают параметры слушателя, в том числе TCP_NODELAY.
+            let parameters = Self.tcpParameters()
             parameters.allowLocalEndpointReuse = true
-            parameters.includePeerToPeer = false
             let listener = try NWListener(using: parameters, on: port)
             listener.service = advertisedService()
             listener.newConnectionHandler = { [weak self] connection in
@@ -738,7 +738,15 @@ final class ClipveyNode {
     }
 
     private static func outgoingParameters() -> NWParameters {
-        let parameters = NWParameters.tcp
+        tcpParameters()
+    }
+
+    /// TCP с TCP_NODELAY (docs/protocol.md, «Транспорт»): без алгоритма Нейгла маленькое сообщение после данных
+    /// (file_end, file_get) уходит сразу, а не ждёт подтверждения, которое получатель откладывает до 200 мс.
+    private static func tcpParameters() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.includePeerToPeer = false
         return parameters
     }

@@ -13,6 +13,7 @@
 #                      связывать Mac с двойниками по 127.0.0.1 без mDNS (см. loopback_mode). Поиск
 #                      через Bonjour/mDNS и путь через локальную сеть тогда не проверяются.
 #   E2E_OLD_PEER=FILE  готовый двойник 0.1.0 для сценариев совместимости
+#   E2E_PEER=FILE      другой двойник вместо windows/Clipvey.Peer/bin/Debug/net10.0/clipvey-peer
 set -euo pipefail
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +21,8 @@ ROOT="$(cd "$E2E_DIR/../.." && pwd)"
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
-PEER="$ROOT/windows/Clipvey.Peer/bin/Debug/net10.0/clipvey-peer"
+# E2E_PEER — другой двойник вместо собранного из этого дерева (например, для сравнения скорости).
+PEER="${E2E_PEER:-$ROOT/windows/Clipvey.Peer/bin/Debug/net10.0/clipvey-peer}"
 # Двойник версии 0.1.0 для проверки совместимости (сценарии *-compat-*). По умолчанию собирается сам
 # (require_old_peer) из коммита «Clipvey 0.1.0» в tests/e2e/tmp/peer-0.1.0; готовый можно указать в E2E_OLD_PEER.
 OLD_PEER_DIR="$E2E_DIR/tmp/peer-0.1.0"
