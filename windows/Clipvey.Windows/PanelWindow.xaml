@@ -322,6 +322,24 @@
                                           AutomationProperties.AutomationId="files" Checked="OnFilesChanged" Unchecked="OnFilesChanged" />
                         </Grid>
 
+                        <!-- «Скачивать автоматически»: до какого размера полученные файлы скачиваются сами, без окошка
+                             «Загрузить». Шесть положений (SharedSettings.AllowedMB), ползунок прилипает к ним. -->
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="AutoDownloadText" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="AutoDownloadValue" Grid.Column="1" Style="{StaticResource Body}" Margin="12,0,0,0"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       AutomationProperties.AutomationId="auto-download-value" />
+                        </Grid>
+                        <Slider x:Name="AutoDownloadSlider" Margin="0,4,0,0" Minimum="0" Maximum="5" SmallChange="1" LargeChange="1"
+                                TickFrequency="1" IsSnapToTickEnabled="True" TickPlacement="None"
+                                AutomationProperties.AutomationId="auto-download"
+                                ValueChanged="OnAutoDownloadChanged" SizeChanged="OnAutoDownloadSizeChanged" />
+                        <Canvas x:Name="AutoDownloadTicks" Height="16" Margin="0,0,0,0" ClipToBounds="False" />
+
 
                         <Grid Margin="0,14,0,0">
                             <Grid.ColumnDefinitions>

@@ -80,6 +80,10 @@ internal sealed partial class PanelWindow : Window
         IsVisibleChanged += OnVisibleChanged;
         Theme.Changed += ApplyBackdrop;
         Localization.Changed += RefreshContent;
+        // Ползунок «Скачивать автоматически»: конец перетаскивания — даже если Slider сам пометил событие обработанным.
+        AutoDownloadSlider.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(OnAutoDownloadDragStarted), handledEventsToo: true);
+        AutoDownloadSlider.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(OnAutoDownloadDragCompleted), handledEventsToo: true);
+        Node.SettingsChanged += OnSharedSettingsChanged;
     }
 
     private static BitmapSource? LoadIcon()
@@ -233,6 +237,7 @@ internal sealed partial class PanelWindow : Window
         _quitting = true;
         Theme.Changed -= ApplyBackdrop;
         Localization.Changed -= RefreshContent;
+        Node.SettingsChanged -= OnSharedSettingsChanged;
         CommitName();
         Close();
     }
@@ -797,6 +802,13 @@ internal sealed partial class PanelWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(FilesSwitch, FilesText.Text);
         FilesSwitch.IsChecked = Node.FilesEnabled;
 
+        AutoDownloadText.Text = L("Скачивать автоматически", "Download automatically");
+        System.Windows.Automation.AutomationProperties.SetName(AutoDownloadSlider, AutoDownloadText.Text);
+        // Пока ползунок тянут, пришедшее с другого устройства его не двигает: применится после отпускания.
+        if (!_autoDownloadDragging)
+            AutoDownloadSlider.Value = AutoDownloadIndex(Node.Settings.AutoDownloadMB);
+        ShowAutoDownload();
+
         LanguageText.Text = L("Язык", "Language");
         System.Windows.Automation.AutomationProperties.SetName(LanguageBox, LanguageText.Text);
         if (_languageListRussian != IsRussian || LanguageBox.Items.Count == 0)
@@ -845,6 +857,115 @@ internal sealed partial class PanelWindow : Window
         if (!_updating && enabled != Node.FilesEnabled)
             _app.SetFilesEnabled(enabled);
     }
+
+    // MARK: - Скачивать автоматически
+
+    /// Тянут ползунок: значение меняется только по отпусканию (не на каждом промежуточном положении).
+    private bool _autoDownloadDragging;
+
+    /// Положение ползунка для значения (МиБ): его или ближайшего допустимого.
+    private static int AutoDownloadIndex(int mb) => SharedSettings.AllowedMB.ToList().IndexOf(SharedSettings.Nearest(mb));
+
+    private int SliderIndex => Math.Clamp((int)Math.Round(AutoDownloadSlider.Value), 0, SharedSettings.AllowedMB.Count - 1);
+
+    /// «50 МБ», «1 ГБ», «Всегда».
+    private static string AutoDownloadValueText(int mb) =>
+        mb == SharedSettings.AlwaysMB ? L("Всегда", "Always")
+        : mb >= 1000 ? L($"{mb / 1000} ГБ", $"{mb / 1000} GB")
+        : L($"{mb} МБ", $"{mb} MB");
+
+    /// Метки под ползунком — без единиц, кроме гигабайта.
+    private static string AutoDownloadTickText(int mb) => mb < 1000 ? mb.ToString() : AutoDownloadValueText(mb);
+
+    /// Значение справа и метки под ползунком — по его положению (пока тянут — где он сейчас).
+    private void ShowAutoDownload()
+    {
+        var index = SliderIndex;
+        var text = AutoDownloadValueText(SharedSettings.AllowedMB[index]);
+        AutoDownloadValue.Text = text;
+        System.Windows.Automation.AutomationProperties.SetItemStatus(AutoDownloadSlider, text);
+        var allowed = SharedSettings.AllowedMB;
+        if (AutoDownloadTicks.Children.Count != allowed.Count || _autoDownloadTicksRussian != IsRussian)
+        {
+            _autoDownloadTicksRussian = IsRussian;
+            AutoDownloadTicks.Children.Clear();
+            foreach (var mb in allowed)
+            {
+                AutoDownloadTicks.Children.Add(new TextBlock
+                {
+                    Text = AutoDownloadTickText(mb),
+                    Style = (Style)FindResource("Caption"),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.NoWrap,
+                });
+            }
+        }
+        // Метка текущего положения — жирная (шире), поэтому метки расставляются заново.
+        for (var i = 0; i < AutoDownloadTicks.Children.Count; i++)
+            ((TextBlock)AutoDownloadTicks.Children[i]).FontWeight = i == index ? FontWeights.SemiBold : FontWeights.Normal;
+        PlaceAutoDownloadTicks();
+    }
+
+    private bool? _autoDownloadTicksRussian;
+
+    private void OnAutoDownloadSizeChanged(object sender, SizeChangedEventArgs e) => PlaceAutoDownloadTicks();
+
+    /// Метки — под делениями: центр бегунка ходит от края дорожки + половина бегунка до другого края − половина.
+    /// Средние — по центру своего деления, крайние — не выходят за края.
+    private void PlaceAutoDownloadTicks()
+    {
+        var width = AutoDownloadTicks.ActualWidth;
+        if (width <= 0 || AutoDownloadTicks.Children.Count < 2)
+            return;
+        double start = 0, span = width;
+        if (AutoDownloadSlider.Template?.FindName("PART_Track", AutoDownloadSlider) is Track { Thumb: { } thumb } track && track.ActualWidth > 0)
+        {
+            var origin = track.TranslatePoint(new Point(0, 0), AutoDownloadTicks);
+            start = origin.X + thumb.ActualWidth / 2;
+            span = track.ActualWidth - thumb.ActualWidth;
+        }
+        var count = AutoDownloadTicks.Children.Count;
+        for (var i = 0; i < count; i++)
+        {
+            var label = (TextBlock)AutoDownloadTicks.Children[i];
+            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var labelWidth = label.DesiredSize.Width;
+            var center = start + span * i / (count - 1);
+            Canvas.SetLeft(label, Math.Clamp(center - labelWidth / 2, 0, Math.Max(0, width - labelWidth)));
+        }
+    }
+
+    /// Положение изменилось: пока тянут — только показать; иначе (клавиатура, щелчок по дорожке, UI Automation) — сразу
+    /// применить. Выставление из настроек (под _updating) действием не считается.
+    private void OnAutoDownloadChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!IsInitialized)
+            return;
+        ShowAutoDownload();
+        if (_updating || _autoDownloadDragging)
+            return;
+        CommitAutoDownload();
+    }
+
+    private void OnAutoDownloadDragStarted(object sender, DragStartedEventArgs e) => _autoDownloadDragging = true;
+
+    private void OnAutoDownloadDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        _autoDownloadDragging = false;
+        CommitAutoDownload();
+    }
+
+    /// Применить положение ползунка: узел сохраняет и рассылает (сохранение — по SettingsChanged в TrayApplication).
+    private void CommitAutoDownload()
+    {
+        var mb = SharedSettings.AllowedMB[SliderIndex];
+        if (mb != Node.Settings.AutoDownloadMB)
+            Node.SetAutoDownloadMB(mb);
+    }
+
+    /// Общие настройки изменились (здесь или на другом устройстве; поток сеанса) — показать.
+    private void OnSharedSettingsChanged(SharedSettings settings) =>
+        Dispatcher.BeginInvoke(RefreshContent, DispatcherPriority.Normal);
 
     private void OnLanguageSelected(object sender, SelectionChangedEventArgs e)
     {
