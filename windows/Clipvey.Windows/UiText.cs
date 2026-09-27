@@ -36,8 +36,8 @@ internal static class UiText
         _ => L("Не удалось прочитать файлы", "Couldn’t read the files"),
     };
 
-    /// Почему файлы не получены (или вставка прервана) — коротко, для окошка. from — имя устройства-источника.
-    public static string TransferFailure(FileTransferFailure? failure, string from) => failure switch
+    /// Почему файлы не получены — коротко, для окошка. from — имя устройства-источника.
+    public static string TransferFailure(FileTransferFailure failure, string from) => failure switch
     {
         FileTransferFailure.DeviceUnavailable => L($"«{from}» недоступно — связь прервалась", $"“{from}” is unavailable — the connection was lost"),
         FileTransferFailure.NotFound => L($"На «{from}» этих файлов уже нет — скопируйте их снова",
@@ -48,7 +48,7 @@ internal static class UiText
         FileTransferFailure.WriteFailed => L("Не удалось записать файл на диск", "Couldn’t write a file to disk"),
         FileTransferFailure.ProtocolError => L("Файлы пришли с ошибкой", "The files arrived damaged"),
         FileTransferFailure.Cancelled => L("Отменено", "Cancelled"),
-        _ => L("Вставка не завершена", "The paste didn’t finish"),
+        _ => L("Файлы не получены", "The files weren’t received"),
     };
 
     /// «12,3 МБ» — размер для окошка. Как в Проводнике: 1 КБ = 1024 байта.

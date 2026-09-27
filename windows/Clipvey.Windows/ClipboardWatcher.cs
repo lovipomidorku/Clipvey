@@ -20,8 +20,8 @@ namespace Clipvey.Windows;
 /// То же содержимое повторно в течение 2 с после отправки не уходит (RepeatedCopyFilter): программы на WinForms
 /// одно копирование делают двумя изменениями буфера.
 ///
-/// Файлы с другого устройства: небольшие — настоящие (CF_HDROP на скачанное), большие — «виртуальные»
-/// (свой IDataObject через OleSetClipboard, VirtualFiles.cs).
+/// Файлы с другого устройства кладутся настоящими: CF_HDROP на скачанное (тихо — в Incoming, по «Загрузить» —
+/// в «Загрузки»\Clipvey).
 internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 {
     private const int WmClipboardUpdate = 0x031D;
@@ -61,9 +61,6 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 
     /// Повтор только что отправленного не отправляется; запись с другого устройства сбрасывает отсчёт.
     private readonly RepeatedCopyFilter _repeats = new();
-
-    /// Виртуальные файлы, которые мы положили в буфер (OleSetClipboard): ссылку держим сами, пока они там.
-    private VirtualFileDataObject? _virtualFiles;
 
     /// onCopy — скопирован текст (переводы строк \n); onCopyImage — картинка (PNG или JPEG, до 20 МиБ);
     /// onCopyFiles — файлы и папки (полные пути). onLocalChange — в буфере что-то не наше (любое изменение).
@@ -144,9 +141,10 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     public static uint Sequence => GetClipboardSequenceNumber();
 
     /// Записать скачанные файлы с другого устройства: CF_HDROP (пути элементов верхнего уровня),
-    /// Preferred DropEffect «копирование» и маркер. sequence — номер буфера, когда пришло описание:
-    /// если буфер с тех пор изменился (скопировали что-то новее), файлы не записываются.
-    public bool WriteRemoteFiles(IReadOnlyList<string> paths, uint sequence)
+    /// Preferred DropEffect «копирование» и маркер. sequence — номер буфера, от которого шло скачивание (пришло
+    /// описание, нажали «Загрузить»): если буфер с тех пор изменился (скопировали что-то новее), файлы
+    /// не записываются. true — файлы в буфере.
+    public async Task<bool> WriteRemoteFilesAsync(IReadOnlyList<string> paths, uint sequence)
     {
         if (GetClipboardSequenceNumber() != sequence)
         {
@@ -161,8 +159,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             (_dropEffectFormat, BitConverter.GetBytes(1)), // DROPEFFECT_COPY
             (_remoteFormat, "1"u8.ToArray()),
         ];
-        _ = WriteFormatsAsync(formats, generation, $"файлы — элементов верхнего уровня: {paths.Count}", sequence);
-        return true;
+        return await WriteFormatsAsync(formats, generation, $"файлы — элементов верхнего уровня: {paths.Count}", sequence);
     }
 
     /// DROPFILES: pFiles = 20, pt, fNC, fWide = 1; затем пути в UTF-16, каждый с \0, и ещё один \0 в конце.
@@ -174,27 +171,6 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
         BitConverter.TryWriteBytes(data.AsSpan(16), 1);
         Encoding.Unicode.GetBytes(text, data.AsSpan(20));
         return data;
-    }
-
-    /// Положить в буфер виртуальные файлы (большие, скачиваются при вставке). Поток интерфейса.
-    public bool PlaceVirtualFiles(VirtualFileDataObject data)
-    {
-        ++_writeGeneration;
-        _repeats.Reset();
-        if (!OleClipboard.Set(data))
-            return false;
-        _virtualFiles = data;
-        return true;
-    }
-
-    /// При выходе: если в буфере ещё наши виртуальные файлы — убрать их (вставить их без программы нельзя).
-    public void ReleaseVirtualFiles()
-    {
-        if (_virtualFiles is not { } data)
-            return;
-        data.CancelPaste();
-        OleClipboard.ClearIfCurrent(data);
-        _virtualFiles = null;
     }
 
     /// Перевести PNG/JPEG в CF_DIB через GDI+. null — не удалось (причина в журнале).
@@ -260,13 +236,13 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     }
 
     /// Положить форматы в буфер одной записью. Буфер может быть занят другой программой — повторяем, не блокируя интерфейс.
-    /// sequence — записывать, только если буфер с тех пор не менялся (null — не проверять).
-    private async Task WriteFormatsAsync(List<(uint Format, byte[] Data)> formats, int generation, string description, uint? sequence = null)
+    /// sequence — записывать, только если буфер с тех пор не менялся (null — не проверять). true — записано.
+    private async Task<bool> WriteFormatsAsync(List<(uint Format, byte[] Data)> formats, int generation, string description, uint? sequence = null)
     {
         for (var attempt = 0; attempt < 10; attempt++)
         {
             if (generation != _writeGeneration)
-                return;
+                return false;
             if (OpenClipboard(Handle))
             {
                 try
@@ -274,12 +250,12 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
                     if (sequence is { } expected && GetClipboardSequenceNumber() != expected)
                     {
                         Log.Write($"Не записано в буфер ({description}): буфер изменился");
-                        return;
+                        return false;
                     }
                     if (!EmptyClipboard())
                     {
                         Log.Write($"Не удалось очистить буфер (ошибка {Marshal.GetLastWin32Error()})");
-                        return;
+                        return false;
                     }
                     foreach (var (format, data) in formats)
                     {
@@ -292,11 +268,12 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
                     CloseClipboard();
                 }
                 Log.Write($"{(formats[0].Format == CfHdrop ? "Записаны" : "Записана")} в буфер {description} ({string.Join(", ", formats.Select(f => FormatName(f.Format)))})");
-                return;
+                return true;
             }
             await Task.Delay(50);
         }
         Log.Write($"Не удалось записать в буфер (занят другой программой): {description}");
+        return false;
     }
 
     private static bool SetBytes(uint format, byte[] data)

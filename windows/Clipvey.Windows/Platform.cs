@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32;
 using Clipvey.Core;
@@ -23,6 +24,12 @@ internal static class AppPaths
     /// %LOCALAPPDATA%\Clipvey\Incoming: небольшие полученные файлы (IncomingCache), старше суток удаляются.
     public static string IncomingDirectory { get; private set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Clipvey", "Incoming");
+
+    /// Куда «Загрузить» кладёт большие файлы: «Загрузки»\Clipvey (известная папка FOLDERID_Downloads — её можно
+    /// перенести на другой диск). В режиме проверки — --downloads DIR или DIR данных\Downloads: настоящие
+    /// «Загрузки» проверки не трогают.
+    public static string DownloadsDirectory => _downloads ??= Path.Combine(KnownDownloads(), "Clipvey");
+    private static string? _downloads;
 
     /// Режим проверки со своей папкой данных (--test --data DIR).
     public static bool IsolatedTest { get; private set; }
@@ -49,7 +56,34 @@ internal static class AppPaths
         var probe = Array.IndexOf(args, "--probe");
         if (probe >= 0 && probe + 1 < args.Length)
             ProbePath = args[probe + 1];
+        var downloads = Array.IndexOf(args, "--downloads");
+        _downloads = downloads >= 0 && downloads + 1 < args.Length
+            ? Path.GetFullPath(args[downloads + 1])
+            : Path.Combine(directory, "Downloads");
     }
+
+    /// Папка «Загрузки» пользователя. Не получилось узнать — %USERPROFILE%\Downloads.
+    private static string KnownDownloads()
+    {
+        var downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B"); // FOLDERID_Downloads
+        if (SHGetKnownFolderPath(downloads, 0, IntPtr.Zero, out var pointer) == 0)
+        {
+            try
+            {
+                if (Marshal.PtrToStringUni(pointer) is { Length: > 0 } path)
+                    return path;
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(pointer);
+            }
+        }
+        Log.Write("Не удалось узнать папку «Загрузки» (SHGetKnownFolderPath), беру %USERPROFILE%\\Downloads");
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out IntPtr path);
 }
 
 /// Ключ устройства, зашифрованный DPAPI: прочитать его может только эта учётная запись на этом компьютере.

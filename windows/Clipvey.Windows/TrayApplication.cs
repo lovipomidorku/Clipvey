@@ -69,7 +69,7 @@ internal sealed class TrayApplication
             shouldRead: () => _node.Devices.Any(device => device.Connected),
             shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages),
             shouldReadFiles: () => _node.FilesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsFiles));
-        _files = new FileTransfers(_node, _watcher, () => Toast, NoteSync, _ui);
+        _files = new FileTransfers(_node, _watcher, () => Toast, NoteSync);
         FileTransfers.CleanCache();
         if (AppPaths.ProbePath is { } probe)
             FileTransfers.Probe(probe);
@@ -96,13 +96,13 @@ internal sealed class TrayApplication
 
         _node.ClipReceived += (text, from) => OnUi(() =>
         {
-            _files.CancelDownload("пришёл текст");
+            _files.RemoteContentArrived("пришёл текст");
             _watcher.WriteRemote(text);
             NoteSync(new LastSync(DateTime.Now, from, SyncKind.Text));
         });
         _node.ImageReceived += (data, mime, from) => OnUi(() =>
         {
-            _files.CancelDownload("пришла картинка");
+            _files.RemoteContentArrived("пришла картинка");
             _watcher.WriteRemoteImage(data, mime);
             NoteSync(new LastSync(DateTime.Now, from, SyncKind.Image));
         });
@@ -152,13 +152,14 @@ internal sealed class TrayApplication
         _node.SetImagesEnabled(enabled);
     }
 
-    /// «Передавать файлы»: сохранить и передать узлу. Выключено — незаконченное фоновое скачивание отменяется.
+    /// «Передавать файлы»: сохранить и передать узлу. Выключено — незаконченное фоновое скачивание отменяется,
+    /// окошко «Загрузить» убирается.
     public void SetFilesEnabled(bool enabled)
     {
         AppSettings.FilesEnabled = enabled;
         _node.SetFilesEnabled(enabled);
         if (!enabled)
-            _files.CancelDownload("передача файлов выключена");
+            _files.FilesDisabled();
     }
 
     /// Открыть режим связывания (из панели и из меню значка) и запомнить срок для обратного отсчёта.
@@ -407,7 +408,7 @@ internal sealed class TrayApplication
         _panel.ShowPanel(settings);
     }
 
-    /// Всплывающее окошко (прогресс, «Готово», ошибки) — одно на программу, создаётся при первом сообщении.
+    /// Всплывающее окошко («Загрузить», прогресс, «Готово», ошибки) — одно на программу, создаётся при первом сообщении.
     private ToastWindow Toast => _toast ??= new ToastWindow(() => _panel is { IsVisible: true } panel ? panel.ScreenBounds : null);
 
     /// Левый клик по значку: открыть панель или закрыть открытую.

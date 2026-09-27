@@ -75,8 +75,6 @@ internal static class Program
         app.Startup += (_, _) =>
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
-            // Виртуальные файлы кладутся в буфер через OleSetClipboard — с этого (STA) потока, с его циклом сообщений.
-            OleClipboard.Initialize();
             try
             {
                 tray = new TrayApplication();

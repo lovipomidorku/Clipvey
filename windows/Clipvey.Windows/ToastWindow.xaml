@@ -15,7 +15,7 @@
         FontSize="14"
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Ideal">
-    <!-- Всплывающее окошко у области уведомлений: загрузка файлов при вставке, «Готово», ошибки.
+    <!-- Всплывающее окошко у области уведомлений: большие файлы («Загрузить»), прогресс загрузки, «Готово», ошибки.
          Рамку, тень и скругление рисует DWM, как у панели; фон — однотонный фон темы. Окно не забирает фокус
          (WS_EX_NOACTIVATE, ToastWindow.xaml.cs): не мешает программе, в которой работает пользователь, и панели. -->
     <shell:WindowChrome.WindowChrome>
@@ -32,24 +32,31 @@
             <TextBlock x:Name="Symbol" Style="{StaticResource Glyph}" FontSize="20" VerticalAlignment="Top" Margin="0,1,12,0"
                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
             <StackPanel Grid.Column="1">
-                <TextBlock x:Name="TitleText" Style="{StaticResource BodyStrong}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                <TextBlock x:Name="TitleText" Style="{StaticResource Body}" TextWrapping="Wrap"
                            AutomationProperties.AutomationId="toast-title" />
-                <TextBlock x:Name="DetailText" Style="{StaticResource Body}" Margin="0,2,0,0"
+                <TextBlock x:Name="DetailText" Style="{StaticResource Body}" FontSize="13" Margin="0,2,0,0" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            AutomationProperties.AutomationId="toast-detail" />
                 <ProgressBar x:Name="Progress" Margin="0,10,0,0" Minimum="0" Maximum="1000"
                              AutomationProperties.AutomationId="toast-progress" />
-                <Grid x:Name="Footer" Margin="0,8,0,0">
+                <Grid x:Name="Footer" Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="StatusText" Style="{StaticResource Caption}" VerticalAlignment="Center"
-                               AutomationProperties.AutomationId="toast-status" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" AutomationProperties.AutomationId="toast-status" />
                     <Button x:Name="ActionButton" Grid.Column="1" MinWidth="96" Margin="12,0,0,0" Focusable="False"
                             AutomationProperties.AutomationId="toast-action" Click="OnAction" />
                 </Grid>
             </StackPanel>
         </Grid>
+        <!-- «×» в правом верхнем углу: убрать окошко («Загрузить» не нужно, «Готово» прочитано). -->
+        <Button x:Name="CloseButton" Style="{StaticResource SubtleButton}" Width="28" Height="28" Margin="0,6,6,0"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Focusable="False"
+                AutomationProperties.AutomationId="toast-close" Click="OnClose">
+            <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="10"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+        </Button>
     </Grid>
 </Window>
