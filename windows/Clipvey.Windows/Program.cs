@@ -20,6 +20,9 @@ internal static class Program
             isFirstInstance = WaitForPreviousInstance(mutex);
         if (!isFirstInstance)
         {
+            // Повторный запуск открывает панель уже работающей копии (например, если значок спрятан в трее).
+            if (TrayApplication.SignalShowPanel())
+                return;
             MessageBox.Show(L("Clipvey уже запущен — его значок в области уведомлений на панели задач.",
                     "Clipvey is already running. Look for its icon in the notification area of the taskbar."), "Clipvey",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);

@@ -89,6 +89,7 @@ internal sealed class TrayApplication : ApplicationContext
             L($"Доступна версия {version} — обновить?", $"Version {version} is available. Update?"), ToolTipIcon.Info));
         _tray.BalloonTipClicked += (_, _) => OnUi(ShowForm);
         _updater.Start();
+        ListenForShowPanel();
     }
 
     /// Сменить своё имя: сохранить и передать узлу. Пустое — имя компьютера.
@@ -230,6 +231,45 @@ internal sealed class TrayApplication : ApplicationContext
         _icons.ReleaseStale();
     }
 
+    /// Имя события «открой панель»: его взводит повторный запуск Clipvey.exe.
+    private const string ShowPanelEventName = @"Local\Clipvey.ShowPanel";
+    private EventWaitHandle? _showPanelEvent;
+    private RegisteredWaitHandle? _showPanelWait;
+
+    /// Для повторного запуска: попросить работающую копию открыть панель. false — копия старая и события не знает.
+    public static bool SignalShowPanel()
+    {
+        try
+        {
+            using var signal = EventWaitHandle.OpenExisting(ShowPanelEventName);
+            // Разрешить работающей копии вывести панель на передний план.
+            AllowSetForegroundWindow(-1);
+            signal.Set();
+            return true;
+        }
+        catch (Exception e) when (e is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private void ListenForShowPanel()
+    {
+        try
+        {
+            _showPanelEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowPanelEventName);
+            _showPanelWait = ThreadPool.RegisterWaitForSingleObject(_showPanelEvent,
+                (_, _) => _ui.Post(_ => ShowForm(), null), null, Timeout.Infinite, executeOnlyOnce: false);
+        }
+        catch (Exception e)
+        {
+            Log.Write($"Не удалось подписаться на повторный запуск: {e.Message}");
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool AllowSetForegroundWindow(int processId);
+
     private void ShowForm()
     {
         if (_form is null || _form.IsDisposed)
@@ -257,6 +297,8 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void Quit()
     {
+        _showPanelWait?.Unregister(null);
+        _showPanelEvent?.Dispose();
         Localization.Changed -= OnLanguageChanged;
         Theme.Changed -= OnThemeChanged;
         Theme.Stop();
