@@ -442,7 +442,9 @@ struct FileProblem {
         case .nameTooLong:
             message = L("Слишком длинное имя файла или путь.", "A file name or path is too long.")
         case .empty:
-            message = L("Нечего отправлять: ссылки и особые файлы не передаются.", "Nothing to send: links and special files aren’t sent.")
+            // Псевдонимы Finder — обычные файлы и отправляются; пропускаются только символические ссылки.
+            message = L("Нечего отправлять: символические ссылки и особые файлы не передаются.",
+                        "Nothing to send: symbolic links and special files aren’t sent.")
         case .disabled:
             message = L("Передача файлов выключена.", "File sync is off.")
         case .unreadable:
