@@ -960,15 +960,23 @@ public sealed class ClipveyNode : IAsyncDisposable
             {
                 using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 idle.CancelAfter(Protocol.IdleTimeout);
-                JsonObject message;
+                SessionFrame frame;
                 try
                 {
-                    message = await info.Channel.ReceiveAsync(idle.Token);
+                    frame = await info.Channel.ReceiveFrameAsync(idle.Token);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     throw new ProtocolException("устройство не отвечает");
                 }
+                using var received = frame;
+                if (frame.Invalid is { } invalid)
+                {
+                    Log.Write($"Двоичный кадр от «{session.PeerName}» пропущен: {invalid}");
+                    continue;
+                }
+                if (frame.Message is not { } message)
+                    continue;
 
                 switch (Messages.Type(message))
                 {

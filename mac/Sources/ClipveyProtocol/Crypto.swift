@@ -112,11 +112,15 @@ public struct SecureCodec: Sendable {
         self.receiveCounter = receiveCounter
     }
 
+    /// Нагрузка кадра: шифротекст ‖ тег. Срез combined (nonce ‖ шифротекст ‖ тег) без копирования.
     public mutating func seal(_ plaintext: Data) throws -> Data {
         let box = try AES.GCM.seal(plaintext, using: sendKey, nonce: try AES.GCM.Nonce(data: Self.nonce(sendCounter)))
         sendCounter += 1
-        return box.ciphertext + box.tag
+        guard let combined = box.combined else { return box.ciphertext + box.tag }
+        return combined.dropFirst(Self.nonceLength)
     }
+
+    private static let nonceLength = 12
 
     public mutating func open(_ payload: Data) throws -> Data {
         guard payload.count >= 16 else {

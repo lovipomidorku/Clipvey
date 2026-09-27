@@ -9,7 +9,6 @@ actor PeerLink {
     private static let queue = DispatchQueue(label: "io.github.lovipomidorku.clipvey.network")
 
     nonisolated let connection: NWConnection
-    private var buffer = Data()
     private var codec: SecureCodec?
 
     init(connection: NWConnection) {
@@ -58,6 +57,18 @@ actor PeerLink {
         try await sendFrame(payload)
     }
 
+    /// Двоичный кусок файла. plaintext уже содержит заголовок (FileChunk.writeHeader) и данные:
+    /// он шифруется как есть, без копирования в новое сообщение.
+    func sendFileChunk(plaintext: Data) async throws {
+        guard var codec else {
+            throw ClipveyError.protocolViolation("Двоичный кадр до шифрования")
+        }
+        let payload = try codec.seal(plaintext)
+        self.codec = codec
+        try await sendFrame(payload)
+    }
+
+    /// Следующее сообщение. После установки шифрования открытый текст с 0x00 в начале — двоичный кусок файла.
     func receive() async throws -> WireMessage {
         let frame = try await receiveFrame()
         guard var codec else {
@@ -65,7 +76,7 @@ actor PeerLink {
         }
         let plaintext = try codec.open(frame)
         self.codec = codec
-        return try WireMessage.decode(plaintext)
+        return try WireMessage.decodeSession(plaintext)
     }
 
     nonisolated func cancel() {
@@ -87,16 +98,22 @@ actor PeerLink {
 
     // MARK: - Кадры
 
+    /// Заголовок и нагрузка ставятся в очередь NWConnection подряд, без точки приостановки между ними,
+    /// отдельными отправками — чтобы не склеивать их копированием (кусок файла — до 1 МиБ).
     private func sendFrame(_ payload: Data) async throws {
         guard !payload.isEmpty, payload.count <= Self.maxFrameBytes else {
             throw ClipveyError.protocolViolation("Недопустимая длина кадра: \(payload.count)")
         }
-        var frame = Data()
-        withUnsafeBytes(of: UInt32(payload.count).bigEndian) { frame.append(contentsOf: $0) }
-        frame.append(payload)
+        var header = Data(count: 4)
+        let length = UInt32(payload.count)
+        header[0] = UInt8(truncatingIfNeeded: length >> 24)
+        header[1] = UInt8(truncatingIfNeeded: length >> 16)
+        header[2] = UInt8(truncatingIfNeeded: length >> 8)
+        header[3] = UInt8(truncatingIfNeeded: length)
         let connection = self.connection
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: frame, completion: .contentProcessed { error in
+            connection.send(content: header, completion: .contentProcessed { _ in })
+            connection.send(content: payload, completion: .contentProcessed { error in
                 if let error {
                     continuation.resume(throwing: ClipveyError.connectionFailed(error.localizedDescription))
                 } else {
@@ -106,32 +123,34 @@ actor PeerLink {
         }
     }
 
+    /// Кадр целиком: сначала 4 байта длины, затем ровно столько байт нагрузки (одним приёмом, если он пришёл весь).
     private func receiveFrame() async throws -> Data {
-        while true {
-            if let frame = try extractFrame() {
-                return frame
-            }
-            buffer.append(try await receiveChunk())
-        }
-    }
-
-    private func extractFrame() throws -> Data? {
-        guard buffer.count >= 4 else { return nil }
-        let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+        let header = try await receiveExactly(4)
+        let length = header.reduce(0) { $0 << 8 | Int($1) }
         guard length > 0, length <= Self.maxFrameBytes else {
             throw ClipveyError.protocolViolation("Недопустимая длина кадра: \(length)")
         }
-        guard buffer.count >= 4 + length else { return nil }
-        let start = buffer.startIndex
-        let frame = buffer.subdata(in: start + 4 ..< start + 4 + length)
-        buffer = Data(buffer[(start + 4 + length)...])
-        return frame
+        return try await receiveExactly(length)
     }
 
-    private func receiveChunk() async throws -> Data {
+    private func receiveExactly(_ count: Int) async throws -> Data {
+        var result = Data()
+        while result.count < count {
+            let chunk = try await receiveChunk(count - result.count)
+            if result.isEmpty {
+                result = chunk
+            } else {
+                result.append(chunk)
+            }
+        }
+        return result
+    }
+
+    /// Не больше count байт; NWConnection отдаёт их, когда придут все (или соединение закроется).
+    private func receiveChunk(_ count: Int) async throws -> Data {
         let connection = self.connection
         return try await withCheckedThrowingContinuation { continuation in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
+            connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, isComplete, error in
                 if let data, !data.isEmpty {
                     continuation.resume(returning: data)
                 } else if let error {

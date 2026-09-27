@@ -247,3 +247,141 @@ public sealed class FileTreeTests : IDisposable
         Assert.Equal(0, IncomingCache.Clean(Path.Combine(_root, "нет такой")));
     }
 }
+
+/// Двоичные куски через настоящий SecureChannel поверх TCP на 127.0.0.1: шифрование на месте, пул буферов,
+/// JSON и куски вперемешку.
+public class FileChunkFrameTests
+{
+    private static JsonObject Frame(int index) => Root["file_chunk_frames"]![index]!.AsObject();
+
+    private static async Task<(SecureChannel Channel, System.Net.Sockets.TcpClient Server)> OpenAsync(byte[] key, ulong counter)
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var client = new System.Net.Sockets.TcpClient();
+        await client.ConnectAsync(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
+        var server = await listener.AcceptTcpClientAsync();
+        listener.Stop();
+        var channel = new SecureChannel(client, client.GetStream(), key, key);
+        channel.SetCounters(counter, counter);
+        return (channel, server);
+    }
+
+    private static async Task<byte[]> ReadFrameAsync(System.Net.Sockets.TcpClient server)
+    {
+        var header = new byte[4];
+        await server.GetStream().ReadExactlyAsync(header);
+        var payload = new byte[System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(header)];
+        await server.GetStream().ReadExactlyAsync(payload);
+        return payload;
+    }
+
+    private static async Task WriteFrameAsync(System.Net.Sockets.TcpClient server, byte[] payload)
+    {
+        var header = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(header, (uint)payload.Length);
+        await server.GetStream().WriteAsync(header);
+        await server.GetStream().WriteAsync(payload);
+    }
+
+    [Theory]
+    [MemberData(nameof(FileProtocolTests.ChunkFrames), MemberType = typeof(FileProtocolTests))]
+    public async Task SealAndOpen(int index)
+    {
+        var frame = Frame(index);
+        var key = Hex(frame["key"]);
+        var counter = ulong.Parse(String(frame["counter"]));
+        var req = frame["req"]!.GetValue<uint>();
+        var data = Hex(frame["data"]);
+
+        var (sender, senderServer) = await OpenAsync(key, counter);
+        await using (sender)
+        using (senderServer)
+        {
+            await sender.SendChunkAsync(req, data, CancellationToken.None);
+            Assert.Equal(String(frame["payload"]), ToHex(await ReadFrameAsync(senderServer)));
+            // Без копии: данные прямо в буфере кадра.
+            using var prepared = FileChunkFrame.Rent();
+            data.CopyTo(prepared.Data);
+            var (again, againServer) = await OpenAsync(key, counter);
+            await using (again)
+            using (againServer)
+            {
+                await again.SendChunkAsync(prepared, req, data.Length, CancellationToken.None);
+                Assert.Equal(String(frame["payload"]), ToHex(await ReadFrameAsync(againServer)));
+            }
+        }
+
+        var (receiver, receiverServer) = await OpenAsync(key, counter);
+        await using (receiver)
+        using (receiverServer)
+        {
+            await WriteFrameAsync(receiverServer, Hex(frame["payload"]));
+            using var received = await receiver.ReceiveFrameAsync(CancellationToken.None);
+            Assert.True(received.IsChunk);
+            Assert.Equal(req, received.Req);
+            Assert.Equal(ToHex(data), ToHex(received.ChunkData.Span));
+        }
+    }
+
+    [Fact]
+    public async Task ChunksAndMessagesInterleave()
+    {
+        var key = Hex(Section("session")["k_ir"]);
+        var (a, aServer) = await OpenAsync(key, 0);
+        var (b, bServer) = await OpenAsync(key, 0);
+        await using (a)
+        await using (b)
+        using (aServer)
+        using (bServer)
+        {
+            // Что отправил a, пересылаем в b как есть: b расшифрует теми же ключом и счётчиками.
+            var big = RandomNumberGenerator.GetBytes(Protocol.FileChunkBytes);
+            await a.SendChunkAsync(7, big, CancellationToken.None);
+            await a.SendAsync(new JsonObject { ["t"] = "ping" }, CancellationToken.None);
+            await a.SendChunkAsync(8, new byte[] { 1, 2, 3 }, CancellationToken.None);
+            for (var i = 0; i < 3; i++)
+                await WriteFrameAsync(bServer, await ReadFrameAsync(aServer));
+
+            using (var first = await b.ReceiveFrameAsync(CancellationToken.None))
+            {
+                Assert.Equal(7u, first.Req);
+                Assert.True(first.ChunkData.Span.SequenceEqual(big));
+                // Кусок можно забрать: кадр его больше не освобождает.
+                using var taken = first.TakeChunk();
+                Assert.Equal(big.Length, taken.Length);
+            }
+            using (var ping = await b.ReceiveFrameAsync(CancellationToken.None))
+                Assert.Equal("ping", Messages.Type(ping.Message!));
+            using (var last = await b.ReceiveFrameAsync(CancellationToken.None))
+                Assert.Equal(new byte[] { 1, 2, 3 }, last.ChunkData.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task BadChunkIsSkippedAndHandshakeRejectsBinary()
+    {
+        var key = Hex(Section("session")["k_ir"]);
+        using var aes = new AesGcm(key, 16);
+        byte[] Seal(byte[] plaintext, ulong counter)
+        {
+            var ciphertext = new byte[plaintext.Length];
+            var tag = new byte[16];
+            aes.Encrypt(SecureChannel.Nonce(counter), plaintext, ciphertext, tag);
+            return [.. ciphertext, .. tag];
+        }
+        var (channel, server) = await OpenAsync(key, 0);
+        await using (channel)
+        using (server)
+        {
+            await WriteFrameAsync(server, Seal([0, 0, 0, 0, 1], 0));
+            using (var invalid = await channel.ReceiveFrameAsync(CancellationToken.None))
+            {
+                Assert.NotNull(invalid.Invalid);
+                Assert.False(invalid.IsChunk);
+            }
+            await WriteFrameAsync(server, Seal(FileChunk.Plaintext(3, [9]), 1));
+            await Assert.ThrowsAsync<ProtocolException>(() => channel.ReceiveAsync(CancellationToken.None));
+        }
+    }
+}
