@@ -172,7 +172,7 @@ internal sealed class TrayApplication
         menu.Items.Add(new Separator());
         // Панель открываем после закрытия меню: иначе меню, закрываясь, заберёт активность, и панель спрячется.
         menu.Items.Add(Item(L("Открыть Clipvey", "Open Clipvey"), () => AfterMenu(ShowPanel)));
-        menu.Items.Add(Item(L("Связать новое устройство", "Pair a new device"), () => AfterMenu(() =>
+        menu.Items.Add(Item(L("Добавить устройство", "Add Device…"), () => AfterMenu(() =>
         {
             StartPairingMode();
             ShowPanel(settings: true);

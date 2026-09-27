@@ -38,7 +38,7 @@ internal static class Program
         Updater.RemoveLeftovers();
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Core.Log.Write($"Необработанная ошибка: {e.ExceptionObject}");
 
-        // WinForms нужен только для NotifyIcon: его собственный контекст синхронизации не ставим,
+        // Из WinForms — NotifyIcon и скрытое окно ClipboardWatcher: их собственный контекст синхронизации не ставим,
         // контекст потока — диспетчер WPF.
         System.Windows.Forms.WindowsFormsSynchronizationContext.AutoInstall = false;
         // Подложку окон (Mica) тема WPF ставит сама — у панели своя, Acrylic, её задаёт PanelWindow.

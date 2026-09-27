@@ -406,8 +406,8 @@ internal sealed partial class PanelWindow : Window
         DevicesTitle.Text = L("Устройства", "Devices");
         DevicesNote.Text = devices.Count == 0 ? "" : L($"подключено {connected} из {devices.Count}", $"{connected} of {devices.Count} connected");
         NoDevicesCard.Visibility = Shown(devices.Count == 0);
-        NoDevicesText.Text = L("Нет связанных устройств. Связать новое устройство можно в настройках.",
-            "No paired devices. You can pair a new device in Settings.");
+        NoDevicesText.Text = L("Нет связанных устройств. Добавить устройство можно в настройках.",
+            "No paired devices. You can add a device in Settings.");
         NoDevicesSettings.Content = L("Открыть настройки", "Open Settings");
         LastSyncText.Visibility = Shown(devices.Count > 0);
         LastSyncText.Text = UiText.LastSync(_app.LastSync);
@@ -593,7 +593,7 @@ internal sealed partial class PanelWindow : Window
         PairResult.Visibility = Shown(_result.Length > 0);
         PairResult.Text = _result;
 
-        PairStart.Content = L("Связать новое устройство", "Pair a new device");
+        PairStart.Content = L("Добавить устройство", "Add Device…");
 
         PairModeText.Text = L("Нажмите «Связать» и на другом устройстве. Затем выберите его здесь — или этот компьютер там.",
             "Select Pair on the other device too. Then choose it here, or choose this PC there.");
