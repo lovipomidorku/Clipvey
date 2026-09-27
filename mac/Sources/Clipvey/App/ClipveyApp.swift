@@ -163,6 +163,7 @@ final class AppModel {
                 deviceType: AppInfo.deviceType,
                 imagesEnabled: TestHooks.enabled ? TestHooks.imagesEnabled : Settings.imagesEnabled,
                 filesEnabled: TestHooks.enabled ? TestHooks.filesEnabled : Settings.filesEnabled,
+                sharedSettings: TestHooks.enabled ? TestHooks.savedSharedSettings : Settings.sharedSettings,
                 store: DeviceStore(directory: directory))
             self.node = node
             transfers = FileTransfers(node: node, bridge: bridge, cacheRoot: Self.incomingCacheRoot, downloadsDirectory: Self.downloadsDirectory)
@@ -190,6 +191,14 @@ final class AppModel {
         }
         node.onFileOffer = { [weak transfers] offer, deviceID, from in
             transfers?.receive(offer, deviceID: deviceID, from: from)
+        }
+        // Общие настройки — изменённые здесь или пришедшие с другого устройства — сохраняются целиком.
+        node.onSettingsChanged = { settings in
+            if TestHooks.enabled {
+                TestHooks.saveSharedSettings(settings)
+            } else {
+                Settings.sharedSettings = settings
+            }
         }
         transfers.onSynced = { [weak self] direction in
             self?.lastSync = LastSync(date: Date(), direction: direction, kind: .files)
@@ -325,6 +334,24 @@ final class AppModel {
             if !newValue {
                 transfers?.filesDisabled()
             }
+        }
+    }
+
+    /// Положение ползунка «Скачивать автоматически», пока его тянут (nil — не тянут): общая настройка меняется,
+    /// когда ползунок отпустили, а не на каждом делении по пути.
+    var autoDownloadDraft: Int?
+    var autoDownloadEditing = false
+
+    /// «Скачивать автоматически»: номер положения ползунка (0…5 по SharedSettings.allowedMB).
+    /// Изменение — общая настройка для всех устройств (узел рассылает и сохраняет через onSettingsChanged).
+    var autoDownloadIndex: Int {
+        get {
+            let mb = node?.sharedSettings.autoDownloadMB ?? SharedSettings.defaultMB
+            return SharedSettings.allowedMB.firstIndex(of: mb) ?? 0
+        }
+        set {
+            let index = min(max(newValue, 0), SharedSettings.allowedMB.count - 1)
+            node?.setAutoDownloadMB(SharedSettings.allowedMB[index])
         }
     }
 

@@ -3,9 +3,10 @@ import Observation
 
 /// Передача файлов со стороны приложения (docs/protocol.md, «Поведение сторон → Файлы в буфере»):
 /// - **отправка**: файлы и папки из буфера → описание другим устройствам (узел);
-/// - **получение до 50 МиБ**: тихо, в фоне, в кэш (Incoming/<id>), затем настоящие файлы — в буфер;
-///   новое содержимое буфера (с другого устройства или скопированное здесь) отменяет незаконченное скачивание;
-/// - **получение больше 50 МиБ**: окошко «Загрузить» → ~/Downloads/Clipvey, затем файлы — в буфер.
+/// - **получение не больше порога** (общая настройка «Скачивать автоматически», по умолчанию 50 МиБ): тихо, в фоне,
+///   в кэш (Incoming/<id>), затем настоящие файлы — в буфер; новое содержимое буфера (с другого устройства или
+///   скопированное здесь) отменяет незаконченное скачивание;
+/// - **получение больше порога**: окошко «Загрузить» → ~/Downloads/Clipvey, затем файлы — в буфер.
 ///
 /// Окошки — стопка FileToast, видно верхнее. Новое окошко ложится сверху, поэтому идущая загрузка не теряется:
 /// она продолжается под новым окошком и снова видна, когда то закрыто. Описание, которое ждёт «Загрузить»,
@@ -13,8 +14,6 @@ import Observation
 @MainActor
 @Observable
 final class FileTransfers {
-    /// До этого размера (включительно) файлы скачиваются сразу, тихо, без окошка. Больше — по кнопке «Загрузить».
-    static let instantLimit: Int64 = 50 * 1024 * 1024
     /// Сколько показывать «Готово» и сообщения об ошибках, если на окошко не навели мышь.
     static let doneDuration: TimeInterval = 6
     static let noticeDuration: TimeInterval = 10
@@ -111,10 +110,12 @@ final class FileTransfers {
     /// Пришло описание файлов — новое содержимое буфера с другого устройства.
     func receive(_ offer: FileOffer, deviceID: String, from name: String) {
         remoteContentArrived()
-        if offer.total <= Self.instantLimit {
+        // Порог — общая настройка «Скачивать автоматически»: до него (включительно) — сразу, тихо, без окошка.
+        let limit = node.sharedSettings.autoDownloadMB
+        if offer.total <= node.sharedSettings.autoDownloadBytes {
             startBackground(offer, deviceID: deviceID, name: name)
         } else {
-            Log.files.info("Файлы \(offer.id, privacy: .public) (\(offer.total) байт) больше 50 МиБ — окошко «Загрузить»")
+            Log.files.info("Файлы \(offer.id, privacy: .public) (\(offer.total) байт) больше \(limit) МиБ — окошко «Загрузить»")
             push(FileToast(offer: offer, deviceID: deviceID, deviceName: name, content: .offer))
         }
     }
@@ -149,7 +150,7 @@ final class FileTransfers {
         toasts.removeAll { if case .offer = $0.content { true } else { false } }
     }
 
-    /// До 50 МиБ: скачать в кэш и, если буфер за это время не менялся, положить в него файлы.
+    /// Не больше порога: скачать в кэш и, если буфер за это время не менялся, положить в него файлы.
     private func startBackground(_ offer: FileOffer, deviceID: String, name: String) {
         let generation = bridge.changeCount
         let directory = IncomingCache.directory(root: cacheRoot, offerID: offer.id)
@@ -329,7 +330,7 @@ final class FileTransfers {
 @Observable
 final class FileToast: Identifiable {
     enum Content {
-        /// Больше 50 МиБ: «Загрузить» или закрыть.
+        /// Больше порога «Скачивать автоматически»: «Загрузить» или закрыть.
         case offer
         case downloading
         /// Загружено; inPasteboard — файлы положены в буфер.

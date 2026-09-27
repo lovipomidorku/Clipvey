@@ -443,6 +443,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 SettingsToggle(title: L("Передавать картинки", "Sync images"), isOn: $model.imagesEnabled)
                 SettingsToggle(title: L("Передавать файлы", "Sync files"), isOn: $model.filesEnabled)
+                AutoDownloadSlider()
             }
             .cardStyle()
 
@@ -480,6 +481,93 @@ struct SettingsView: View {
         }
         .onAppear { launchAtLogin.refresh() }
     }
+}
+
+/// «Скачивать автоматически»: до какого размера полученные файлы скачиваются сами, без окошка «Загрузить».
+/// Шесть положений (SharedSettings.allowedMB), ползунок прилипает к ним. Настройка общая для всех устройств:
+/// меняется, когда ползунок отпустили (с клавиатуры — сразу), и обновляется, когда её изменили на другом устройстве.
+private struct AutoDownloadSlider: View {
+    @Environment(AppModel.self) private var model
+
+    private static var last: Int { SharedSettings.allowedMB.count - 1 }
+
+    /// «50 МБ», «1 ГБ», «Всегда».
+    static func valueText(_ mb: Int) -> String {
+        if mb == SharedSettings.alwaysMB { return L("Всегда", "Always") }
+        if mb >= 1000 { return L("\(mb / 1000) ГБ", "\(mb / 1000) GB") }
+        return L("\(mb) МБ", "\(mb) MB")
+    }
+
+    /// Метки под ползунком: без единиц, кроме гигабайта.
+    static func tickText(_ mb: Int) -> String {
+        mb < 1000 ? "\(mb)" : valueText(mb)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(L("Скачивать автоматически", "Download automatically"))
+                Spacer()
+                Text(Self.valueText(SharedSettings.allowedMB[index]))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(model.autoDownloadDraft ?? model.autoDownloadIndex) },
+                    set: { value in
+                        let index = min(max(Int(value.rounded()), 0), Self.last)
+                        if model.autoDownloadEditing {
+                            model.autoDownloadDraft = index
+                        } else {
+                            model.autoDownloadIndex = index
+                        }
+                    }),
+                in: 0...Double(Self.last),
+                step: 1,
+                onEditingChanged: { editing in
+                    model.autoDownloadEditing = editing
+                    if !editing, let draft = model.autoDownloadDraft {
+                        model.autoDownloadDraft = nil
+                        model.autoDownloadIndex = draft
+                    }
+                })
+                .labelsHidden()
+                .controlSize(.small)
+                .accessibilityLabel(L("Скачивать автоматически", "Download automatically"))
+                .accessibilityValue(Self.valueText(SharedSettings.allowedMB[index]))
+            ticks
+        }
+    }
+
+    /// Метки под делениями: средние — по центру своего деления, крайние — у краёв (деления стоят почти у концов дорожки).
+    private var ticks: some View {
+        GeometryReader { geometry in
+            let inset: CGFloat = 2
+            let step = (geometry.size.width - 2 * inset) / CGFloat(Self.last)
+            ZStack(alignment: .leading) {
+                ForEach(Array(SharedSettings.allowedMB.enumerated()), id: \.offset) { position, mb in
+                    let label = Text(Self.tickText(mb))
+                        .font(.caption2.weight(position == index ? .semibold : .regular))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    switch position {
+                    case 0:
+                        label.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    case Self.last:
+                        label.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    default:
+                        label.position(x: inset + step * CGFloat(position), y: geometry.size.height / 2)
+                    }
+                }
+            }
+        }
+        .frame(height: 12)
+        .accessibilityHidden(true)
+    }
+
+    /// Положение: пока тянут — где ползунок, иначе — текущая настройка.
+    private var index: Int { model.autoDownloadDraft ?? model.autoDownloadIndex }
 }
 
 /// «Имя этого Mac»: сохраняется по Enter, при потере фокуса и при уходе со страницы.

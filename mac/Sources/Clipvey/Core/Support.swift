@@ -76,6 +76,25 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "filesEnabled") }
     }
 
+    /// Общие настройки (docs/protocol.md, «Общие настройки»): все три поля — чтобы после перезапуска сравнивать
+    /// с другими устройствами по тем же changed и by. nil — ещё не сохранялись (по умолчанию).
+    static var sharedSettings: SharedSettings? {
+        get {
+            let defaults = UserDefaults.standard
+            guard let mb = defaults.object(forKey: "autoDownloadMB") as? Int else { return nil }
+            return SharedSettings(
+                autoDownloadMB: mb,
+                changed: (defaults.object(forKey: "autoDownloadChanged") as? NSNumber)?.int64Value ?? 0,
+                by: defaults.string(forKey: "autoDownloadBy") ?? "")
+        }
+        set {
+            let defaults = UserDefaults.standard
+            defaults.set(newValue?.autoDownloadMB, forKey: "autoDownloadMB")
+            defaults.set(newValue.map { NSNumber(value: $0.changed) }, forKey: "autoDownloadChanged")
+            defaults.set(newValue?.by, forKey: "autoDownloadBy")
+        }
+    }
+
     static var language: AppLanguage {
         get { UserDefaults.standard.string(forKey: "language").flatMap(AppLanguage.init(rawValue:)) ?? .system }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "language") }

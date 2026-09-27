@@ -34,6 +34,9 @@ import Network
 ///   --toast-hover N        окошки «Готово» и сообщения первые N секунд считаются «под мышью»
 ///   --toast-demo           показать все виды окошка без сети (снимки — в --toast-shots) и выйти
 ///   --appearance dark|light  оформление программы (для снимков)
+///   --set-auto-download-mb N  изменить общую настройку «Скачивать автоматически» (МиБ), как ползунком в настройках
+///   --settings-delay N     сделать это через N секунд после запуска (по умолчанию сразу)
+///                          Общие настройки в режиме проверки хранятся в DATA/shared-settings.json, а не в UserDefaults.
 /// Узел печатает также «INFO имя os=… form=… caps=…», «RENAMED старое новое», «IMAGE от размер sha256hex»,
 /// «FILE_OFFER от id элементов байт», «FILES_RESUMED id получено» (скачивание продолжено по новому сеансу);
 /// сценарий файлов — «FILES_SENT получателей id элементов байт», «FILES_REFUSED код»,
@@ -41,6 +44,8 @@ import Network
 /// «FILES_READY id элементов pasteboard|saved» (скачано; положено в буфер или нет — буфер уже сменился),
 /// «FILES_FAILED id код»; окошко — «TOAST вид подробности» (offer id, progress id, done id pasteboard|saved,
 /// failed код, notice код, hidden), «TOAST_CLICK кнопка ok|failed», «FILES_ENABLED 0».
+/// Общие настройки: «SETTINGS МиБ changed by» — изменились (здесь или пришли новее), «AUTO_DOWNLOAD_SET МиБ changed by»
+/// — после --set-auto-download-mb.
 @MainActor
 enum TestHooks {
     static private(set) var enabled = false
@@ -77,6 +82,8 @@ enum TestHooks {
     private static var appearance: String?
     private static var filesOffAfter: Double?
     private static var toastHoverSeconds: Double?
+    private static var setAutoDownloadMB: Int?
+    private static var settingsDelay: Double = 0
     /// Окошко считается «под мышью» (--toast-hover).
     static private(set) var toastHovered = false
     private static var shotNumber = 0
@@ -127,6 +134,8 @@ enum TestHooks {
         appearance = value("--appearance")
         filesOffAfter = value("--files-off-after").flatMap(Double.init)
         toastHoverSeconds = value("--toast-hover").flatMap(Double.init)
+        setAutoDownloadMB = value("--set-auto-download-mb").flatMap { Int($0) }
+        settingsDelay = value("--settings-delay").flatMap(Double.init) ?? 0
         if let index = arguments.firstIndex(of: "--rename-after"), index + 2 < arguments.count,
            let seconds = Double(arguments[index + 1]) {
             renameAfter = (seconds, arguments[index + 2])
@@ -154,6 +163,28 @@ enum TestHooks {
                 guard let node else { return }
                 Task { await save(offer, from: deviceID, node: node, into: URL(fileURLWithPath: saveFiles)) }
             }
+        }
+    }
+
+    // MARK: - Общие настройки
+
+    private static var sharedSettingsFile: URL { scratchDirectory.appendingPathComponent("shared-settings.json") }
+
+    /// Общие настройки режима проверки (DATA/shared-settings.json, те же ключи, что у двойника); nil — нет.
+    static var savedSharedSettings: SharedSettings? {
+        guard let data = try? Data(contentsOf: sharedSettingsFile),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let mb = object["autoDownloadMB"] as? Int,
+              let changed = (object["autoDownloadChanged"] as? NSNumber)?.int64Value,
+              let by = object["autoDownloadBy"] as? String else { return nil }
+        return SharedSettings(autoDownloadMB: mb, changed: changed, by: by)
+    }
+
+    static func saveSharedSettings(_ settings: SharedSettings) {
+        let object: [String: Any] = ["autoDownloadMB": settings.autoDownloadMB, "autoDownloadChanged": settings.changed, "autoDownloadBy": settings.by]
+        try? FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: object) {
+            try? data.write(to: sharedSettingsFile, options: .atomic)
         }
     }
 
@@ -278,6 +309,13 @@ enum TestHooks {
                 try? await Task.sleep(for: .seconds(renameAfter.seconds))
                 node.setName(renameAfter.name)
                 emit("NAME \(node.name)")
+            }
+        }
+        if let setAutoDownloadMB {
+            Task {
+                try? await Task.sleep(for: .seconds(settingsDelay))
+                node.setAutoDownloadMB(setAutoDownloadMB)
+                emit("AUTO_DOWNLOAD_SET \(node.sharedSettings.description)")
             }
         }
         if let exitAfter {

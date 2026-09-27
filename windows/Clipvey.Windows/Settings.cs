@@ -92,6 +92,31 @@ internal static class AppSettings
         set => Write("filesEnabled", JsonValue.Create(value));
     }
 
+    /// Общие настройки (docs/protocol.md, «Общие настройки»): все три поля — чтобы после перезапуска сравнивать
+    /// с другими устройствами по тем же changed и by. null — ещё не сохранялись (узел берёт значения по умолчанию).
+    public static SharedSettings? SharedSettings
+    {
+        get
+        {
+            try
+            {
+                if (Data["autoDownloadMB"]?.GetValue<int>() is not { } mb)
+                    return null;
+                return new SharedSettings(mb, Data["autoDownloadChanged"]?.GetValue<long>() ?? 0, Read("autoDownloadBy") ?? "");
+            }
+            catch (Exception e) when (e is InvalidOperationException or FormatException)
+            {
+                return null;
+            }
+        }
+        set
+        {
+            Write("autoDownloadMB", value is null ? null : JsonValue.Create(value.AutoDownloadMB));
+            Write("autoDownloadChanged", value is null ? null : JsonValue.Create(value.Changed));
+            Write("autoDownloadBy", value?.By);
+        }
+    }
+
     private static string? Read(string key)
     {
         try
