@@ -3,23 +3,21 @@ import SwiftUI
 
 /// Состояние синхронизации для значка в строке меню.
 enum SyncState {
-    /// Нет подключений (или ещё нет связанных устройств): контур.
+    /// Нет подключений (или ещё нет связанных устройств): силуэт с крестиком.
     case idle
-    /// Подключено хотя бы одно устройство: заполненный значок.
+    /// Подключено хотя бы одно устройство: силуэт.
     case connected
-    /// Все связанные устройства выключены: перечёркнутый контур.
+    /// Все связанные устройства выключены: бледный силуэт с крестиком.
     case disabled
 }
 
-/// Значок строки меню. Все три состояния рисуются одинаково — одним размером и одним
-/// шаблоном, — чтобы значок не прыгал при смене состояния. Перечёркнутого варианта
-/// doc.on.clipboard в SF Symbols нет, поэтому черта дорисовывается поверх контура.
+/// Значок строки меню: силуэт значка приложения — планшет с зажимом и документ с загнутым углом.
+/// Нет подключений — в углу крестик; всё выключено — силуэт бледнее и с крестиком; есть обновление — точка.
+/// Все состояния одного размера и рисуются шаблоном: цвет берётся от строки меню.
 @MainActor
 enum MenuBarIcon {
-    private static let outline = "doc.on.clipboard"
-    private static let filled = "doc.on.clipboard.fill"
-    /// Как у системных значков строки меню.
-    nonisolated private static let pointSize: CGFloat = 14
+    /// Размер значка в точках.
+    nonisolated private static let side: CGFloat = 18
 
     private struct Key: Hashable {
         let state: SyncState
@@ -34,71 +32,97 @@ enum MenuBarIcon {
         if let cached = cache[key] {
             return cached
         }
-        let image = draw(state, badge: badge)
-        cache[key] = image
-        return image
-    }
-
-    private static func draw(_ state: SyncState, badge: Bool) -> NSImage {
-        let canvas = symbol(outline)?.size ?? NSSize(width: 18, height: 18)
-        let name = state == .connected ? filled : outline
-        let slashed = state == .disabled
-        let image = NSImage(size: canvas, flipped: false) { rect in
-            // Символ создаётся здесь же: так замыкание не держит NSImage снаружи.
-            guard let symbol = MenuBarIcon.symbol(name) else { return false }
-            let origin = NSPoint(x: (rect.width - symbol.size.width) / 2, y: (rect.height - symbol.size.height) / 2)
-            symbol.draw(in: NSRect(origin: origin, size: symbol.size))
-            if slashed {
-                MenuBarIcon.drawSlash(in: rect)
-            }
-            if badge {
-                MenuBarIcon.drawBadge(in: rect)
-            }
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            MenuBarIcon.draw(in: rect, state: state, badge: badge)
             return true
         }
         image.isTemplate = true
         image.accessibilityDescription = "Clipvey"
+        cache[key] = image
         return image
     }
 
-    /// Черта из левого верхнего угла в правый нижний, как у системных *.slash:
-    /// сначала вырезается широкая полоса, затем поверх рисуется тонкая линия.
-    nonisolated private static func drawSlash(in rect: NSRect) {
-        let inset: CGFloat = 1.5
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: rect.minX + inset, y: rect.maxY - inset))
-        path.line(to: NSPoint(x: rect.maxX - inset, y: rect.minY + inset))
-        path.lineCapStyle = .round
-
+    /// Рисунок в сетке 18×18 (начало — левый нижний угол).
+    nonisolated private static func draw(in rect: NSRect, state: SyncState, badge: Bool) {
         guard let context = NSGraphicsContext.current else { return }
-        context.saveGraphicsState()
-        context.compositingOperation = .destinationOut
-        path.lineWidth = 4
-        NSColor.black.setStroke()
-        path.stroke()
-        context.restoreGraphicsState()
+        let unit = rect.width / 18
+        func box(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) -> NSRect {
+            NSRect(x: rect.minX + x * unit, y: rect.minY + y * unit, width: width * unit, height: height * unit)
+        }
+        func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+            NSPoint(x: rect.minX + x * unit, y: rect.minY + y * unit)
+        }
+        /// Вырезать (стереть уже нарисованное) фигурой.
+        func cut(_ body: () -> Void) {
+            context.saveGraphicsState()
+            context.compositingOperation = .destinationOut
+            NSColor.black.set()
+            body()
+            context.restoreGraphicsState()
+        }
+        NSColor.black.set()
 
-        path.lineWidth = 1.5
-        NSColor.black.setStroke()
-        path.stroke()
-    }
+        // Планшет с прорезью зажима.
+        NSBezierPath(roundedRect: box(7, 4.5, 9.5, 12), xRadius: 2.3 * unit, yRadius: 2.3 * unit).fill()
+        cut { NSBezierPath(roundedRect: box(9.6, 13.4, 4.3, 1.4), xRadius: 0.7 * unit, yRadius: 0.7 * unit).fill() }
 
-    /// Точка «есть обновление»: вокруг неё вырезается кольцо, чтобы она не сливалась с контуром.
-    nonisolated private static func drawBadge(in rect: NSRect) {
-        let diameter: CGFloat = 6
-        let dot = NSRect(x: rect.maxX - diameter, y: rect.maxY - diameter, width: diameter, height: diameter)
-        guard let context = NSGraphicsContext.current else { return }
-        context.saveGraphicsState()
-        context.compositingOperation = .destinationOut
-        NSColor.black.setFill()
-        NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
-        context.restoreGraphicsState()
-        NSColor.black.setFill()
-        NSBezierPath(ovalIn: dot).fill()
-    }
+        // Документ с загнутым правым верхним углом; вокруг него — зазор до планшета.
+        let x: CGFloat = 1.5, y: CGFloat = 1, width: CGFloat = 9.5, height: CGFloat = 11.5, fold: CGFloat = 3.8, radius: CGFloat = 2
+        let document = NSBezierPath()
+        document.move(to: point(x + radius, y))
+        document.line(to: point(x + width - radius, y))
+        document.appendArc(withCenter: point(x + width - radius, y + radius), radius: radius * unit, startAngle: 270, endAngle: 360)
+        document.line(to: point(x + width, y + height - fold))
+        document.line(to: point(x + width - fold, y + height))
+        document.line(to: point(x + radius, y + height))
+        document.appendArc(withCenter: point(x + radius, y + height - radius), radius: radius * unit, startAngle: 90, endAngle: 180)
+        document.line(to: point(x, y + radius))
+        document.appendArc(withCenter: point(x + radius, y + radius), radius: radius * unit, startAngle: 180, endAngle: 270)
+        document.close()
+        document.lineJoinStyle = .round
+        document.lineWidth = 2.6 * unit
+        cut { document.stroke() }
+        document.fill()
+        // Загиб: уголок обведён прорезью.
+        let corner = NSBezierPath()
+        corner.move(to: point(x + width - fold, y + height - 0.3))
+        corner.line(to: point(x + width - fold, y + height - fold + 0.6))
+        corner.appendArc(withCenter: point(x + width - fold + 0.6, y + height - fold + 0.6), radius: 0.6 * unit, startAngle: 180, endAngle: 270)
+        corner.line(to: point(x + width - 0.3, y + height - fold))
+        corner.lineCapStyle = .round
+        corner.lineWidth = 1.2 * unit
+        cut { corner.stroke() }
 
-    nonisolated private static func symbol(_ name: String) -> NSImage? {
-        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular))
+        if state == .disabled {
+            // Бледнее целиком (а не по частям, иначе документ и планшет просвечивают друг через друга).
+            context.saveGraphicsState()
+            NSColor.black.withAlphaComponent(0.4).setFill()
+            rect.fill(using: .destinationIn)
+            context.restoreGraphicsState()
+        }
+        if state != .connected {
+            // Крестик в правом нижнем углу, вокруг — вырезанный круг.
+            let center = point(14.4, 3.6)
+            let diameter = 6.8 * unit
+            cut { NSBezierPath(ovalIn: NSRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)).fill() }
+            let arm = 1.7 * unit
+            let cross = NSBezierPath()
+            cross.move(to: NSPoint(x: center.x - arm, y: center.y - arm))
+            cross.line(to: NSPoint(x: center.x + arm, y: center.y + arm))
+            cross.move(to: NSPoint(x: center.x - arm, y: center.y + arm))
+            cross.line(to: NSPoint(x: center.x + arm, y: center.y - arm))
+            cross.lineWidth = 1.5 * unit
+            cross.lineCapStyle = .round
+            NSColor.black.setStroke()
+            cross.stroke()
+        }
+        if badge {
+            // Точка «есть обновление»; вокруг неё вырезается кольцо, чтобы она не сливалась с силуэтом.
+            let diameter = 4.4 * unit
+            let dot = NSRect(x: rect.maxX - diameter, y: rect.maxY - diameter, width: diameter, height: diameter)
+            cut { NSBezierPath(ovalIn: dot.insetBy(dx: -1.3 * unit, dy: -1.3 * unit)).fill() }
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+        }
     }
 }

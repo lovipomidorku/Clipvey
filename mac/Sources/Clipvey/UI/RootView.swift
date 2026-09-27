@@ -67,7 +67,8 @@ struct RootView: View {
     }
 }
 
-/// Главная страница: устройства, связывание, подсказка про доступ к буферу.
+/// Главная страница: устройства, последняя синхронизация, подсказка про доступ к буферу.
+/// Связывание — в настройках.
 struct MainView: View {
     @Environment(AppModel.self) private var model
 
@@ -75,6 +76,15 @@ struct MainView: View {
         if let node = model.node {
             VStack(alignment: .leading, spacing: 12) {
                 UpdateBanner()
+                if node.isPairingMode || node.incoming != nil || node.outgoing != nil {
+                    // Связывание идёт в настройках — отсюда туда можно вернуться.
+                    Button {
+                        model.page = .settings
+                    } label: {
+                        Label(L("Идёт связывание — продолжить", "Pairing in progress — continue"), systemImage: "link")
+                    }
+                    .buttonStyle(.link)
+                }
                 DevicesSection(node: node)
                 if let lastSync = model.lastSyncText {
                     Label {
@@ -85,7 +95,6 @@ struct MainView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
-                PairingSection(node: node)
                 if model.bridge.needsAccessPermission && node.devices.contains(where: \.enabled) {
                     AccessHint()
                 }
@@ -106,11 +115,14 @@ private struct DevicesSection: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader(title: summary)
             if node.devices.isEmpty {
-                Text(L("Свяжите этот Mac с другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.",
-                       "Pair this Mac with another computer to copy text on one and paste it on the other."))
+                Text(L("Нет связанных устройств. Добавить устройство можно в настройках.",
+                       "No paired devices. You can add a device in Settings."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Button(L("Открыть настройки", "Open Settings")) {
+                    model.page = .settings
+                }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(node.devices) { device in
@@ -243,10 +255,12 @@ private struct PairingSection: View {
             } else if node.isPairingMode {
                 pairingModeView
             } else {
-                Button(L("Связать новое устройство", "Pair New Device…")) {
+                Button(L("Добавить устройство", "Add Device…")) {
                     model.codeInput = ""
                     node.startPairingMode()
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cardStyle()
             }
             if let result = node.pairingResult {
                 Text(result.text)
@@ -346,8 +360,8 @@ private struct PairingSection: View {
 
     private var pairingModeView: some View {
         pairingCard(title: L("Режим связывания", "Pairing"), step: node.candidates.isEmpty ? 1 : 2) {
-            Text(L("Нажмите «Связать» и на другом компьютере. Затем выберите его здесь или этот Mac — там.",
-                    "Click Pair on the other computer too. Then choose it here, or choose this Mac there."))
+            Text(L("Нажмите «Добавить устройство» и на другом компьютере. Затем выберите его здесь или этот Mac — там.",
+                    "Click Add Device on the other computer too. Then choose it here, or choose this Mac there."))
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
             if node.candidates.isEmpty {
@@ -411,6 +425,10 @@ struct SettingsView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
+            if let node = model.node {
+                PairingSection(node: node)
+            }
+
             DeviceNameField()
                 .cardStyle()
 

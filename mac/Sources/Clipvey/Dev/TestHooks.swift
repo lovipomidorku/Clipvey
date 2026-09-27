@@ -37,6 +37,7 @@ enum TestHooks {
     private static var sendDelay: Double = 0
     private static var exitAfter: Double?
     private static var probeWindow = false
+    private static var probeShots: String?
     static private(set) var updateURL: URL?
     static private(set) var updatePublicKey: String?
     static private(set) var updateNow = false
@@ -61,6 +62,7 @@ enum TestHooks {
         sendDelay = value("--send-delay").flatMap(Double.init) ?? 0
         exitAfter = value("--exit-after").flatMap(Double.init)
         probeWindow = arguments.contains("--probe-window")
+        probeShots = value("--probe-shots")
         updateURL = value("--update-url").flatMap(URL.init(string:))
         updatePublicKey = value("--update-public-key")
         updateNow = arguments.contains("--update-now")
@@ -98,6 +100,16 @@ enum TestHooks {
             let window = controller.window
             let statusBottom = NSApp.windows.first { String(describing: type(of: $0)).contains("StatusBarWindow") }?.frame.minY ?? -1
             emit("WINDOW \(step) visible=\(controller.isShown) x=\(Int(window.frame.minX)) top=\(Int(window.frame.maxY)) height=\(Int(window.frame.height)) statusBottom=\(Int(statusBottom))")
+            // --probe-shots DIR: снимок области окна (с полями) — screencapture считает от левого верхнего угла.
+            if let probeShots, let screenTop = NSScreen.screens.first?.frame.maxY {
+                let rect = window.frame.insetBy(dx: -12, dy: -12)
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                task.arguments = ["-x", "-R\(Int(rect.minX)),\(Int(screenTop - rect.maxY)),\(Int(rect.width)),\(Int(rect.height))",
+                                  "\(probeShots)/\(step).png"]
+                try? task.run()
+                task.waitUntilExit()
+            }
         }
         Task {
             try? await Task.sleep(for: .seconds(1.5))

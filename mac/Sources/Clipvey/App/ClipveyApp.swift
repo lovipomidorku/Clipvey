@@ -3,20 +3,19 @@ import SwiftUI
 
 @main
 enum Entry {
+    /// Обычное AppKit-приложение без сцен SwiftUI: значок и окошко — свои (StatusBarController).
+    /// Со сценой SwiftUI (даже пустой Settings) macOS открывала при запуске пустое окно настроек.
     @MainActor
     static func main() {
         TestHooks.parse(Array(CommandLine.arguments.dropFirst()))
-        ClipveyApp.main()
-    }
-}
-
-struct ClipveyApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
-    /// Значок и окошко — свои (StatusBarController), сцена SwiftUI нужна только формально.
-    var body: some Scene {
-        SwiftUI.Settings {
-            EmptyView()
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        // Без значка в Dock (как LSUIElement в Info.plist) — и при запуске голого исполняемого файла.
+        app.setActivationPolicy(.accessory)
+        app.mainMenu = MainMenu.make()
+        withExtendedLifetime(delegate) {
+            app.run()
         }
     }
 }
@@ -30,6 +29,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar = StatusBarController(model: model)
         model.start()
         Updater.shared.start()
+    }
+}
+
+/// Скрытое главное меню. Его не видно (у приложения нет строки меню), но из него берутся сочетания клавиш:
+/// без пунктов «Правка» в полях ввода не работают ⌘X, ⌘C, ⌘V, ⌘A и ⌘Z.
+@MainActor
+enum MainMenu {
+    static func make() -> NSMenu {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: L("Выйти из Clipvey", "Quit Clipvey"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: L("Правка", "Edit"))
+        edit.addItem(withTitle: L("Отменить", "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: L("Повторить", "Redo"), action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: L("Вырезать", "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: L("Скопировать", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L("Вставить", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L("Выделить всё", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        main.addItem(editItem)
+        return main
     }
 }
 

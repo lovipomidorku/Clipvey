@@ -68,7 +68,7 @@ final class StatusBarController: NSObject, NSWindowDelegate {
         background.state = .active
         background.maskImage = Self.roundedMask(radius: Self.cornerRadius)
 
-        let root = RootView()
+        let content = RootView()
             .environment(model)
             .environment(LaunchAtLogin.shared)
             .fixedSize(horizontal: false, vertical: true)
@@ -78,8 +78,10 @@ final class StatusBarController: NSObject, NSWindowDelegate {
             .onPreferenceChange(ContentHeightKey.self) { [weak self] height in
                 MainActor.assumeIsolated { self?.contentHeightChanged(height) }
             }
-            // Пока окно ещё не подогнано под новую высоту, содержимое стоит у верхнего края, а не по центру.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Корень всегда размером с окно, содержимое — поверх, у верхнего края. Если корень больше окна
+        // (новая страница длиннее, а окно ещё не выросло), NSHostingView ставит его по центру — была видна
+        // середина страницы настроек, а потом она прыгала на место.
+        let root = Color.clear.overlay(alignment: .top) { content }
         let hosting = NSHostingView(rootView: root)
         // Размер окна задаёт контроллер; своих ограничений размера у хоста нет.
         hosting.sizingOptions = []
@@ -93,10 +95,10 @@ final class StatusBarController: NSObject, NSWindowDelegate {
         guard height > 0, abs(height - contentHeight) > 0.5 else { return }
         contentHeight = height
         guard panel.isVisible, !resizeScheduled else { return }
-        // При смене страницы SwiftUI может за один переход сообщить две высоты подряд (например, 426, затем 414).
-        // Ждём пару кадров и берём последнюю — иначе нижний край окна дёрнется.
+        // Размер меняется на следующем обороте цикла событий: если за одно обновление SwiftUI сообщит
+        // несколько высот подряд, окно получит только последнюю.
         resizeScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             resizeScheduled = false
             guard panel.isVisible else { return }
@@ -124,6 +126,12 @@ final class StatusBarController: NSObject, NSWindowDelegate {
         panel.setFrame(frame(), display: false)
         panel.makeKeyAndOrderFront(nil)
         panel.invalidateShadow()
+        // Без этого система ставит фокус клавиатуры на первую кнопку (шестерёнку) и рисует вокруг неё кольцо.
+        // Tab по-прежнему переводит фокус на элементы окна.
+        panel.makeFirstResponder(nil)
+        DispatchQueue.main.async { [weak self] in
+            self?.panel.makeFirstResponder(nil)
+        }
         statusItem.button?.highlight(true)
         // Клик в другой программе закрывает окно (окно без активации приложения может и не потерять фокус).
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

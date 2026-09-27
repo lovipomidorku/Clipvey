@@ -17,7 +17,7 @@ Build from source: `mac/scripts/build.sh --install`, `windows/publish.sh`.
 
 ## Usage
 
-1. Click "Pair New Device" on both computers, pick one from the list on the other, enter the code and confirm with "Done".
+1. In Settings, click "Add Device" on both computers, pick one from the list on the other, enter the code and confirm with "Done".
 2. A new device only needs to be paired with one of the others: data is relayed along the chain.
 3. The switch next to a device pauses syncing; "Unpair" removes the pairing.
 

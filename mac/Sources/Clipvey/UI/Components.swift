@@ -56,7 +56,7 @@ struct PairingSteps: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            item(1, L("Нажмите «Связать» на обоих", "Click Pair on both"))
+            item(1, L("«Добавить устройство» на обоих", "Add Device on both"))
             item(2, L("Выберите устройство или введите код", "Choose a device or enter the code"))
             item(3, L("Подтвердите", "Confirm"))
         }
