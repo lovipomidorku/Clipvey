@@ -63,7 +63,8 @@ internal sealed class TrayApplication
         // Тип устройства: ноутбук, если есть батарея.
         var form = Forms.SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(Forms.BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
         _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
-            deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled, filesEnabled: AppSettings.FilesEnabled);
+            deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled, filesEnabled: AppSettings.FilesEnabled,
+            settings: AppSettings.SharedSettings);
         _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage, OnLocalFiles,
             onLocalChange: () => _files?.CancelDownload("в буфере новое содержимое"),
             shouldRead: () => _node.Devices.Any(device => device.Connected),
@@ -107,6 +108,8 @@ internal sealed class TrayApplication
             NoteSync(new LastSync(DateTime.Now, from, SyncKind.Image));
         });
         _node.FileOffered += received => OnUi(() => _files.Receive(received));
+        // Общие настройки (изменённые здесь или пришедшие с другого устройства) сохраняются целиком, по порядку.
+        _node.SettingsChanged += settings => OnUi(() => AppSettings.SharedSettings = settings);
         _node.Changed += () => OnUi(Refresh);
         _node.IncomingPairingChanged += incoming => OnUi(() =>
         {

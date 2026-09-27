@@ -18,8 +18,8 @@ namespace Clipvey.Windows;
 /// Всё — на потоке интерфейса: события узла сюда переносит TrayApplication.
 internal sealed class FileTransfers
 {
-    /// Всего до этого размера (включительно) файлы скачиваются сразу, тихо, в фоне.
-    public const long BackgroundLimit = 50L * 1024 * 1024;
+    /// Всего до этого размера (включительно) файлы скачиваются сразу, тихо, в фоне: общая настройка «Скачивать автоматически».
+    public long BackgroundLimit => _node.Settings.AutoDownloadBytes;
 
     /// Сколько показывать «Готово», если на окошко не навели мышь.
     private static readonly TimeSpan DoneLifetime = TimeSpan.FromSeconds(6);
