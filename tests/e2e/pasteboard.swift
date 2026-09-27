@@ -4,7 +4,10 @@
 //   pasteboard write-secret NAME TEXT   записать как менеджер паролей (org.nspasteboard.ConcealedType)
 //   pasteboard write-image NAME FILE [TEXT]   записать картинку (тип по расширению: png, jpg/jpeg, tiff/tif, heic)
 //                                и, если задан, текст рядом с ней (как браузер кладёт ссылку на картинку)
+//   pasteboard write-files NAME PATH…  записать файлы и папки, как Finder: на каждый — элемент со ссылкой на файл
+//                                (file:///.file/id=…) и именем текстом
 //   pasteboard read NAME         напечатать текст
+//   pasteboard read-files NAME   напечатать пути файлов из буфера (public.file-url), по одному в строке
 //   pasteboard read-data NAME TYPE FILE   сохранить данные типа TYPE (например public.png) в FILE
 //   pasteboard types NAME        напечатать типы, по одному в строке
 //   pasteboard clear NAME        очистить и освободить буфер
@@ -13,7 +16,7 @@ import AppKit
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 3 else {
-    FileHandle.standardError.write(Data("использование: pasteboard write|write-secret|write-image|read|read-data|types|clear NAME [...]\n".utf8))
+    FileHandle.standardError.write(Data("использование: pasteboard write|write-secret|write-image|write-files|read|read-files|read-data|types|clear NAME [...]\n".utf8))
     exit(2)
 }
 let pasteboard = NSPasteboard(name: NSPasteboard.Name(arguments[2]))
@@ -45,8 +48,28 @@ case "write-image" where arguments.count >= 4:
     if arguments.count >= 5 {
         pasteboard.setString(arguments[4], forType: .string)
     }
+case "write-files" where arguments.count >= 4:
+    var items: [NSPasteboardItem] = []
+    for path in arguments[3...] {
+        let url = URL(fileURLWithPath: path) as CFURL
+        guard let reference = CFURLCreateFileReferenceURL(nil, url, nil)?.takeRetainedValue() else {
+            FileHandle.standardError.write(Data("нет файла \(path)\n".utf8))
+            exit(1)
+        }
+        let item = NSPasteboardItem()
+        item.setString(CFURLGetString(reference) as String, forType: .fileURL)
+        item.setString((path as NSString).lastPathComponent, forType: .string)
+        items.append(item)
+    }
+    pasteboard.clearContents()
+    pasteboard.writeObjects(items)
 case "read":
     print(pasteboard.string(forType: .string) ?? "", terminator: "")
+case "read-files":
+    let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    for url in urls {
+        print(url.path)
+    }
 case "read-data" where arguments.count >= 5:
     guard let data = pasteboard.data(forType: NSPasteboard.PasteboardType(arguments[3])) else {
         FileHandle.standardError.write(Data("в буфере нет \(arguments[3])\n".utf8))
