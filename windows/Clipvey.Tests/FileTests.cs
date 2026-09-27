@@ -254,13 +254,19 @@ public class FileChunkFrameTests
 {
     private static JsonObject Frame(int index) => Root["file_chunk_frames"]![index]!.AsObject();
 
+    private const int SocketBuffer = 64 * 1024;
+
     private static async Task<(SecureChannel Channel, System.Net.Sockets.TcpClient Server)> OpenAsync(byte[] key, ulong counter)
     {
         var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
         listener.Start();
-        var client = new System.Net.Sockets.TcpClient();
+        // Буферы сокетов маленькие и постоянные (без автонастройки системы): кадр в 1 МиБ в них не помещается,
+        // поэтому проверка, которая пишет, не читая с другой стороны, зависает всегда, а не изредка.
+        var client = new System.Net.Sockets.TcpClient { SendBufferSize = SocketBuffer, ReceiveBufferSize = SocketBuffer };
         await client.ConnectAsync(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
         var server = await listener.AcceptTcpClientAsync();
+        server.SendBufferSize = SocketBuffer;
+        server.ReceiveBufferSize = SocketBuffer;
         listener.Stop();
         var channel = new SecureChannel(client, client.GetStream(), key, key);
         channel.SetCounters(counter, counter);
@@ -336,14 +342,24 @@ public class FileChunkFrameTests
         using (bServer)
         {
             // Что отправил a, пересылаем в b как есть: b расшифрует теми же ключом и счётчиками.
+            // Отправка, пересылка и приём идут одновременно: кадр в 1 МиБ больше буферов сокетов, и запись
+            // без читателя на другой стороне ждала бы вечно (так проверка и зависала — изредка, когда система
+            // не успевала увеличить буферы сама).
             var big = RandomNumberGenerator.GetBytes(Protocol.FileChunkBytes);
-            await a.SendChunkAsync(7, big, CancellationToken.None);
-            await a.SendAsync(new JsonObject { ["t"] = "ping" }, CancellationToken.None);
-            await a.SendChunkAsync(8, new byte[] { 1, 2, 3 }, CancellationToken.None);
-            for (var i = 0; i < 3; i++)
-                await WriteFrameAsync(bServer, await ReadFrameAsync(aServer));
+            var send = Task.Run(async () =>
+            {
+                await a.SendChunkAsync(7, big, CancellationToken.None);
+                await a.SendAsync(new JsonObject { ["t"] = "ping" }, CancellationToken.None);
+                await a.SendChunkAsync(8, new byte[] { 1, 2, 3 }, CancellationToken.None);
+            });
+            var forward = Task.Run(async () =>
+            {
+                for (var i = 0; i < 3; i++)
+                    await WriteFrameAsync(bServer, await ReadFrameAsync(aServer));
+            });
 
-            using (var first = await b.ReceiveFrameAsync(CancellationToken.None))
+            var timeout = TimeSpan.FromSeconds(10);
+            using (var first = await b.ReceiveFrameAsync(CancellationToken.None).WaitAsync(timeout))
             {
                 Assert.Equal(7u, first.Req);
                 Assert.True(first.ChunkData.Span.SequenceEqual(big));
@@ -351,10 +367,12 @@ public class FileChunkFrameTests
                 using var taken = first.TakeChunk();
                 Assert.Equal(big.Length, taken.Length);
             }
-            using (var ping = await b.ReceiveFrameAsync(CancellationToken.None))
+            using (var ping = await b.ReceiveFrameAsync(CancellationToken.None).WaitAsync(timeout))
                 Assert.Equal("ping", Messages.Type(ping.Message!));
-            using (var last = await b.ReceiveFrameAsync(CancellationToken.None))
+            using (var last = await b.ReceiveFrameAsync(CancellationToken.None).WaitAsync(timeout))
                 Assert.Equal(new byte[] { 1, 2, 3 }, last.ChunkData.ToArray());
+            await send.WaitAsync(timeout);
+            await forward.WaitAsync(timeout);
         }
     }
 

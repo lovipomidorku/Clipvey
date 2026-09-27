@@ -280,7 +280,9 @@ public class FileTransferSessionLossTests
     public async Task StreamFailsWhenSourceGoesAway()
     {
         await using var pair = await NodePair.StartAsync();
-        pair.WriteRandom("уйдёт.bin", 8 * 1024 * 1024);
+        // Больше, чем поток держит наперёд (16 МиБ): файл не может прийти целиком, пока источник ещё на связи.
+        // С 8 МиБ источник изредка успевал отдать всё до DisposeAsync — и чтение заканчивалось без ошибки.
+        pair.WriteRandom("уйдёт.bin", 48 * 1024 * 1024);
         var offer = await pair.OfferAsync(Path.Combine(pair.Files, "уйдёт.bin"));
         using var stream = pair.Receiver.OpenFileStream(offer, pair.SourceId, 0);
         stream.ReadExactly(new byte[10]);
