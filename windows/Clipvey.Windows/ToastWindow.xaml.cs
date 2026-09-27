@@ -239,8 +239,40 @@ internal sealed partial class ToastWindow : Window
         UpdateLayout();
         Place();
         if (!IsVisible)
+        {
             Show();
+            if (!AppPaths.ToastNoRedraw)
+                RedrawAfterShow();
+        }
         Place();
+    }
+
+    /// Неактивное окно (ShowActivated = false, WS_EX_NOACTIVATE) с WindowChrome: первый кадр WPF отдаёт раньше,
+    /// чем DWM начинает показывать окно, и кадр теряется — видна только подложка, пока движение мыши над окошком
+    /// не заставит перерисовать (у панели так не бывает: её активирует Activate()). Поэтому после показа окно
+    /// перерисовывается целиком (RedrawWindow → WM_PAINT: HwndTarget заново отдаёт весь кадр) — на ближайшем
+    /// проходе отрисовки, через 150 мс, когда DWM точно показывает окно, и через секунду (если кадр потерялся
+    /// из-за занятой видеокарты). Прогресс перерисовывается сам 4 раза в секунду — поэтому пустыми оставались
+    /// только окошка без него («Загрузить», «Готово», ошибки).
+    private void RedrawAfterShow()
+    {
+        void Redraw()
+        {
+            if (!IsVisible || _hwnd == IntPtr.Zero)
+                return;
+            InvalidateVisual();
+            RedrawWindow(_hwnd, IntPtr.Zero, IntPtr.Zero, RdwInvalidate | RdwUpdateNow | RdwAllChildren | RdwFrame);
+        }
+        Dispatcher.BeginInvoke(DispatcherPriority.Render, Redraw);
+        foreach (var delay in new[] { 150, 1000 })
+        {
+            var later = new DispatcherTimer(TimeSpan.FromMilliseconds(delay), DispatcherPriority.Render, (sender, _) =>
+            {
+                ((DispatcherTimer)sender!).Stop();
+                Redraw();
+            }, Dispatcher);
+            later.Start();
+        }
     }
 
     /// Панель открылась или спряталась — встать так, чтобы её не закрывать.
@@ -334,6 +366,10 @@ internal sealed partial class ToastWindow : Window
     }
 
     private const uint SwpNoSize = 0x0001, SwpNoMove = 0x0002, SwpNoZOrder = 0x0004, SwpNoActivate = 0x0010;
+    private const uint RdwInvalidate = 0x0001, RdwAllChildren = 0x0080, RdwUpdateNow = 0x0100, RdwFrame = 0x0400;
+
+    [DllImport("user32.dll")]
+    private static extern bool RedrawWindow(IntPtr window, IntPtr updateRect, IntPtr updateRegion, uint flags);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct WindowPos

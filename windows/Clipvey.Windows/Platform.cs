@@ -41,6 +41,16 @@ internal static class AppPaths
     /// размеры и атрибуты, без чтения содержимого), и записать итог в журнал. Ничего не отправляется.
     public static string? ProbePath { get; private set; }
 
+    /// Режим проверки: --toast-demo ВИД[,ВИД…] — показать виды окошка по очереди без сети (offer, progress, done,
+    /// error, notice, receiving, received, chain — смена вида в показанном окошке), --toast-demo-step МС — сколько
+    /// держать каждый (по умолчанию 3500). Перед каждым видом окошко прячется: проверяется первое появление.
+    public static IReadOnlyList<string> ToastDemo { get; private set; } = [];
+    public static int ToastDemoStep { get; private set; } = 3500;
+
+    /// Режим проверки: --toast-no-redraw — показывать окошко без принудительной перерисовки (как до исправления
+    /// «пустого окошка»), чтобы снимком сравнить.
+    public static bool ToastNoRedraw { get; private set; }
+
     public static void Configure(string[] args)
     {
         var index = Array.IndexOf(args, "--data");
@@ -56,6 +66,13 @@ internal static class AppPaths
         var probe = Array.IndexOf(args, "--probe");
         if (probe >= 0 && probe + 1 < args.Length)
             ProbePath = args[probe + 1];
+        var demo = Array.IndexOf(args, "--toast-demo");
+        if (demo >= 0 && demo + 1 < args.Length)
+            ToastDemo = args[demo + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var step = Array.IndexOf(args, "--toast-demo-step");
+        if (step >= 0 && step + 1 < args.Length && int.TryParse(args[step + 1], out var milliseconds))
+            ToastDemoStep = Math.Clamp(milliseconds, 500, 60_000);
+        ToastNoRedraw = args.Contains("--toast-no-redraw");
         var downloads = Array.IndexOf(args, "--downloads");
         _downloads = downloads >= 0 && downloads + 1 < args.Length
             ? Path.GetFullPath(args[downloads + 1])

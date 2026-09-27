@@ -6,8 +6,10 @@ namespace Clipvey.Windows;
 /// Файлы и папки в буфере (docs/protocol.md, «Поведение сторон → Файлы в буфере»):
 /// - скопированное здесь (CF_HDROP) уходит описанием (OfferFilesAsync); ошибка — в окошке;
 /// - полученное всего не больше порога — тихо скачивается в Incoming и кладётся в буфер настоящими файлами
-///   (CF_HDROP), без окошка; окошко — только при ошибке. Новое содержимое (своё или с другого устройства)
-///   отменяет незаконченное скачивание;
+///   (CF_HDROP). Быстрое — без окошка; дольше SlowBackgroundDelay — компактное окошко «Получение …» с полосой
+///   и «Отмена», по готовности — «Готово — можно вставлять» на пару секунд (иначе кажется, что вставляется
+///   прежнее). Ошибка — в окошке. Новое содержимое (своё или с другого устройства) отменяет незаконченное
+///   скачивание и убирает его окошко;
 /// - больше порога — окошко «… скопировал …» с «Загрузить»: файлы скачиваются в «Загрузки»\Clipvey с прогрессом
 ///   в окошке и кладутся в буфер, если он с нажатия не менялся.
 ///
@@ -24,6 +26,12 @@ internal sealed class FileTransfers
     /// Сколько показывать «Готово», если на окошко не навели мышь.
     private static readonly TimeSpan DoneLifetime = TimeSpan.FromSeconds(6);
 
+    /// Тихое скачивание дольше этого — окошко «Получение …»; быстрые проходят без окошка.
+    private static readonly TimeSpan SlowBackgroundDelay = TimeSpan.FromMilliseconds(1500);
+
+    /// Сколько показывать «Готово — можно вставлять» после тихого скачивания с окошком.
+    private static readonly TimeSpan ReceivedLifetime = TimeSpan.FromSeconds(2.5);
+
     private readonly ClipveyNode _node;
     private readonly ClipboardWatcher _watcher;
     private readonly Func<ToastWindow> _toast;
@@ -32,7 +40,8 @@ internal sealed class FileTransfers
     /// Идущее фоновое скачивание (не больше одного: новое содержимое отменяет прежнее).
     private Download? _download;
 
-    private sealed record Download(FileOfferReceived Received, CancellationTokenSource Cancel);
+    /// Card — окошко «Получение …» (в стопке — только если скачивание идёт дольше SlowBackgroundDelay).
+    private sealed record Download(FileOfferReceived Received, CancellationTokenSource Cancel, Card Card);
 
     /// Стопка окошек; видно последнее.
     private readonly List<Card> _cards = [];
@@ -157,35 +166,58 @@ internal sealed class FileTransfers
         _download = null;
         Log.Write($"Скачивание файлов {download.Received.Offer.Id} отменено: {reason}");
         download.Cancel.Cancel();
+        // Окошко «Получение …» убирается сразу, не дожидаясь, пока узел закончит отмену.
+        if (_cards.Remove(download.Card))
+            Present();
     }
 
     private async void DownloadInBackground(FileOfferReceived received)
     {
         var offer = received.Offer;
-        var download = new Download(received, new CancellationTokenSource());
+        var card = new Card(CardKind.Receiving, received);
+        var download = new Download(received, new CancellationTokenSource(), card);
+        card.Cancel = download.Cancel;
         _download = download;
         // Буфер на момент прихода описания: если к концу скачивания он изменится, файлы не записываются.
         var sequence = ClipboardWatcher.Sequence;
         var target = IncomingCache.DirectoryFor(AppPaths.IncomingDirectory, offer.Id);
         Log.Write($"Файлы {offer.Id} от «{received.DeviceName}»: {offer.Items.Count} элементов, {offer.Total} байт — скачиваются в фоне");
+        RevealWhenSlow(download);
         try
         {
             await Task.Run(() => Prepare(target, offer.Total));
             // Смену сеанса и короткий обрыв посреди скачивания переживает узел (продолжает по новому сеансу).
-            var paths = await Task.Run(() => _node.DownloadFilesAsync(offer, received.DeviceId, target, null, download.Cancel.Token));
+            var progress = new Counter(card);
+            var paths = await Task.Run(() => _node.DownloadFilesAsync(offer, received.DeviceId, target, progress, download.Cancel.Token));
             if (!ReferenceEquals(_download, download))
             {
                 Log.Write($"Файлы {offer.Id} скачаны, но в буфере уже новее — не записаны");
                 return;
             }
             _download = null;
-            if (await _watcher.WriteRemoteFilesAsync(paths, sequence))
+            var inClipboard = await _watcher.WriteRemoteFilesAsync(paths, sequence);
+            if (inClipboard)
                 _noteSync(new LastSync(DateTime.Now, received.DeviceName, SyncKind.Files));
+            if (_cards.Contains(card))
+            {
+                if (inClipboard && !_closed)
+                {
+                    card.Kind = CardKind.Received;
+                    Present();
+                }
+                else
+                {
+                    _cards.Remove(card);
+                    Present();
+                }
+            }
         }
         catch (Exception e)
         {
             if (ReferenceEquals(_download, download))
                 _download = null;
+            if (_cards.Remove(card))
+                Present();
             var problem = Problem.Of(e, received.DeviceName, AppPaths.IncomingDirectory, inDownloads: false);
             if (problem.Failure == FileTransferFailure.Cancelled)
                 return;
@@ -195,8 +227,19 @@ internal sealed class FileTransfers
         }
         finally
         {
+            card.Cancel = null;
             download.Cancel.Dispose();
         }
+    }
+
+    /// Тихое скачивание ещё идёт через SlowBackgroundDelay — показать окошко «Получение …».
+    private async void RevealWhenSlow(Download download)
+    {
+        await Task.Delay(SlowBackgroundDelay);
+        if (!ReferenceEquals(_download, download) || _closed || _cards.Contains(download.Card))
+            return;
+        Log.Write($"Тихое скачивание {download.Received.Offer.Id} идёт дольше {SlowBackgroundDelay.TotalSeconds:0.#} с — окошко «Получение»");
+        Push(download.Card);
     }
 
     // MARK: - «Загрузить»
@@ -292,6 +335,10 @@ internal sealed class FileTransfers
         /// Больше порога: «Загрузить» или закрыть.
         Offer,
         Downloading,
+        /// Тихое скачивание (не больше порога) идёт дольше SlowBackgroundDelay: «Получение …», полоса, «Отмена».
+        Receiving,
+        /// Тихое скачивание с окошком закончилось, файлы в буфере: «Готово — можно вставлять», исчезает само.
+        Received,
         /// Загружено; InClipboard — файлы положены в буфер.
         Done,
         /// Загрузка не удалась.
@@ -348,9 +395,9 @@ internal sealed class FileTransfers
     /// Закрыть окошко («×», «Закрыть», само по времени). Идущая загрузка при этом отменяется, как «Отмена».
     private void Dismiss(Card card)
     {
-        if (card.Kind == CardKind.Downloading)
+        if (card.Kind is CardKind.Downloading or CardKind.Receiving)
         {
-            card.Cancel?.Cancel();
+            CancelCard(card);
             return;
         }
         if (card.Kind == CardKind.Offer)
@@ -421,7 +468,24 @@ internal sealed class FileTransfers
                 TitleStrong = true,
                 Progress = () => new ToastProgress(Math.Min(card.ReceivedBytes, offer.Total), offer.Total),
                 ActionText = L("Отмена", "Cancel"),
-                Action = () => card.Cancel?.Cancel(),
+                Action = () => CancelCard(card),
+            },
+            // «Получение «Отчёт.pdf» (+2 ещё) с MacBook» — тихое скачивание, которое идёт дольше полутора секунд.
+            CardKind.Receiving => new ToastView(ToastIcon.Download,
+                L($"Получение {names} с «{received.DeviceName}»", $"Receiving {names} from “{received.DeviceName}”"))
+            {
+                TitleStrong = true,
+                Progress = () => new ToastProgress(Math.Min(card.ReceivedBytes, offer.Total), offer.Total),
+                ActionText = L("Отмена", "Cancel"),
+                Action = () => CancelCard(card),
+            },
+            CardKind.Received => new ToastView(ToastIcon.Done, L("Готово — можно вставлять", "Done — ready to paste"))
+            {
+                TitleStrong = true,
+                Detail = names,
+                Close = close,
+                AutoHide = ReceivedLifetime,
+                Expired = close,
             },
             CardKind.Done => new ToastView(ToastIcon.Done, L($"Готово: {names}", $"Done: {names}"))
             {
@@ -443,6 +507,17 @@ internal sealed class FileTransfers
                 Action = close,
             },
         };
+    }
+
+    /// «Отмена» (или «×») идущей загрузки: после «Загрузить» — её отмена, у тихого скачивания — как новое содержимое.
+    private void CancelCard(Card card)
+    {
+        if (card.Kind == CardKind.Receiving && _download is { } download && ReferenceEquals(download.Card, card))
+        {
+            CancelDownload("нажата «Отмена»");
+            return;
+        }
+        card.Cancel?.Cancel();
     }
 
     /// «Отчёт.pdf» (+2 ещё) — первый элемент верхнего уровня (то, что скопировали) и сколько ещё.
@@ -492,6 +567,102 @@ internal sealed class FileTransfers
                 : L($"Clipvey не может записывать в {directory}", $"Clipvey can’t save to {directory}")),
             _ => new(FileTransferFailures.Of(e), null, UiText.TransferFailure(FileTransferFailures.Of(e), device)),
         };
+    }
+
+    // MARK: - Режим проверки
+
+    /// --toast-demo: виды окошка по очереди, без сети. Перед каждым видом окошко прячется (проверка первого
+    /// появления); «chain» — смена вида в уже показанном окошке («Загрузить» → загрузка → «Готово»).
+    /// В журнале — «Демо окошка: вид» в момент показа.
+    public async void Demo(IReadOnlyList<string> kinds, TimeSpan step)
+    {
+        var big = new FileOfferReceived(new FileOffer("d0000000000000000000000000000001",
+            [new FileItem("Отчёт за 2025 год.pdf", 1_150_000_000), new FileItem("Фотографии", null),
+             new FileItem("Фотографии/IMG_0001.HEIC", 50_000_000), new FileItem("Презентация.pptx", 34_000_000)], 1_234_000_000),
+            "demo", "MacBook");
+        var quiet = new FileOfferReceived(new FileOffer("d0000000000000000000000000000002",
+            [new FileItem("Папка 130 МБ, 300 файлов", null), new FileItem("Папка 130 МБ, 300 файлов/файл 1.bin", 136_396_800)], 136_396_800),
+            "demo", "MacBook");
+        await Task.Delay(1500);
+        foreach (var kind in kinds)
+        {
+            _cards.Clear();
+            Present();
+            await Task.Delay(800);
+            Log.Write($"Демо окошка: {kind}");
+            var feed = new CancellationTokenSource();
+            Card Progress(CardKind cardKind, FileOfferReceived received, long start)
+            {
+                var card = new Card(cardKind, received);
+                card.Report(start);
+                _ = FeedAsync(card, received.Offer.Total, feed.Token);
+                return card;
+            }
+            switch (kind)
+            {
+                case "offer":
+                    Push(new Card(CardKind.Offer, big));
+                    break;
+                case "progress":
+                    Push(Progress(CardKind.Downloading, big, 340_000_000));
+                    break;
+                case "done":
+                    Push(new Card(CardKind.Done, big) { InClipboard = true });
+                    break;
+                case "error":
+                    Push(new Card(CardKind.Failed, big)
+                    {
+                        Problem = new Problem(FileTransferFailure.Changed, null, UiText.TransferFailure(FileTransferFailure.Changed, "MacBook")),
+                    });
+                    break;
+                case "notice":
+                    ShowNotice(L("Файлы от «MacBook» не получены", "Files from “MacBook” weren’t received"),
+                        UiText.TransferFailure(FileTransferFailure.DeviceUnavailable, "MacBook"));
+                    break;
+                case "receiving":
+                    Push(Progress(CardKind.Receiving, quiet, 21_000_000));
+                    break;
+                case "received":
+                    Push(new Card(CardKind.Received, quiet));
+                    break;
+                case "chain":
+                    var chain = new Card(CardKind.Offer, big);
+                    Push(chain);
+                    await Task.Delay(step / 3);
+                    Log.Write("Демо окошка: chain-progress");
+                    chain.Report(12_000_000);
+                    _ = FeedAsync(chain, big.Offer.Total, feed.Token);
+                    chain.Kind = CardKind.Downloading;
+                    Present();
+                    await Task.Delay(step / 3);
+                    Log.Write("Демо окошка: chain-done");
+                    chain.Kind = CardKind.Done;
+                    chain.InClipboard = true;
+                    Present();
+                    break;
+            }
+            await Task.Delay(kind == "chain" ? step / 3 : step);
+            feed.Cancel();
+        }
+        _cards.Clear();
+        Present();
+        Log.Write("Демо окошка: конец");
+    }
+
+    /// Прогресс для демонстрации: +45 МБ/с, пока не отменят.
+    private static async Task FeedAsync(Card card, long total, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && card.ReceivedBytes < total)
+            {
+                await Task.Delay(250, ct);
+                card.Report(Math.Min(total, card.ReceivedBytes + 45_000_000 / 4));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     // MARK: - Выход

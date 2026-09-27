@@ -138,6 +138,8 @@ internal sealed class TrayApplication
         _tray.BalloonTipClicked += (_, _) => OnUi(ShowPanel);
         _updater.Start();
         ListenForShowPanel();
+        if (AppPaths.ToastDemo.Count > 0)
+            _files.Demo(AppPaths.ToastDemo, TimeSpan.FromMilliseconds(AppPaths.ToastDemoStep));
     }
 
     /// Сменить своё имя: сохранить и передать узлу. Пустое — имя компьютера.
