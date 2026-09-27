@@ -928,7 +928,8 @@ final class ClipveyNode {
                 case .invalidFileMessage(let type, let reason):
                     Log.files.notice("\(type, privacy: .public) от «\(session.peerName, privacy: .public)» пропущено: \(reason, privacy: .public)")
                 case .ping:
-                    try await link.send(.pong)
+                    // Без ожидания: иначе приём стоит, пока из очереди уходят куски файлов.
+                    try await link.post(.pong)
                 case .pong:
                     break
                 default:

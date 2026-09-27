@@ -569,7 +569,8 @@ actor FileWriter {
 
 /// Обслуживание file_get одного сеанса: запросы по очереди, в порядке поступления; файл читается кусками
 /// по 1 МиБ в фоне (pread прямо в буфер открытого текста, без копий). Каждый кусок — отдельный кадр PeerLink,
-/// поэтому ping, clip и info проходят между кусками.
+/// поэтому ping, clip и info проходят между кусками. Куски, file_end и file_error уходят окном PeerLink
+/// (sendFileChunk, post): следующий кусок читается, пока предыдущие ещё в пути, и между файлами труба не пустеет.
 actor FileServer {
     /// Запрос: файл url с позиции offset до конца (size — размер на момент описания) или сразу ошибка failure.
     struct Job: Sendable {
@@ -649,7 +650,7 @@ actor FileServer {
     private func serve(_ job: Job) async throws {
         if let failure = job.failure {
             Log.files.info("Запрос \(job.req) от «\(self.peerName, privacy: .public)»: \(failure, privacy: .public)")
-            try await link.send(.fileError(req: job.req, reason: failure))
+            try await link.post(.fileError(req: job.req, reason: failure))
             return
         }
         guard let url = job.url else { return }
@@ -696,14 +697,14 @@ actor FileServer {
             try await replyError(job, "changed", "размер «\(url.path)» изменился во время передачи")
             return
         }
-        try await link.send(.fileEnd(req: job.req, size: sent))
+        try await link.post(.fileEnd(req: job.req, size: sent))
         servedFiles += 1
         servedBytes += sent
     }
 
     private func replyError(_ job: Job, _ reason: String, _ detail: String) async throws {
         Log.files.notice("Запрос \(job.req) от «\(self.peerName, privacy: .public)»: \(reason, privacy: .public) — \(detail, privacy: .public)")
-        try await link.send(.fileError(req: job.req, reason: reason))
+        try await link.post(.fileError(req: job.req, reason: reason))
     }
 
     private static func size(_ descriptor: Int32) -> Int64 {
