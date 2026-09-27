@@ -99,7 +99,7 @@ internal sealed class TrayApplication
         _node.IncomingPairingChanged += incoming => OnUi(() =>
         {
             if (incoming is not null)
-                ShowPanel();
+                ShowPanel(settings: true);
             Refresh();
         });
         _node.PairingSucceeded += name => OnUi(() =>
@@ -175,7 +175,7 @@ internal sealed class TrayApplication
         menu.Items.Add(Item(L("Связать новое устройство", "Pair a new device"), () => AfterMenu(() =>
         {
             StartPairingMode();
-            ShowPanel();
+            ShowPanel(settings: true);
         })));
         menu.Items.Add(new Separator());
 
@@ -342,10 +342,12 @@ internal sealed class TrayApplication
 
     // MARK: - Панель
 
-    private void ShowPanel()
+    private void ShowPanel() => ShowPanel(settings: false);
+
+    private void ShowPanel(bool settings)
     {
         _panel ??= new PanelWindow(this);
-        _panel.ShowPanel();
+        _panel.ShowPanel(settings);
     }
 
     /// Левый клик по значку: открыть панель или закрыть открытую.

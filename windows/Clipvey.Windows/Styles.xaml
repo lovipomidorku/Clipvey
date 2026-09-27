@@ -124,6 +124,35 @@
         </Setter>
     </Style>
 
+    <!-- Строка-переход во всю ширину («Идёт связывание — продолжить»): карточка с акцентным фоном. -->
+    <Style x:Key="BarButton" TargetType="Button">
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" />
+                        <Border x:Name="Hover" CornerRadius="8" Background="Transparent" />
+                        <ContentPresenter Margin="14,12" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Hover" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Точка состояния устройства. -->
     <Style x:Key="StatusDot" TargetType="Ellipse">
         <Setter Property="Width" Value="10" />

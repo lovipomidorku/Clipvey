@@ -57,6 +57,9 @@ internal sealed partial class PanelWindow : Window
     /// Язык, на котором заполнен список «Язык».
     private bool? _languageListRussian;
 
+    /// Открыта страница настроек (иначе главная).
+    private bool _settingsPage;
+
     /// Когда панель спряталась из-за ухода в другую программу (Environment.TickCount64).
     public long HiddenAt { get; private set; }
 
@@ -135,6 +138,7 @@ internal sealed partial class PanelWindow : Window
             return;
         Dwm.TrySetDark(_hwnd, Theme.IsDark);
         var acrylic = Dwm.TrySetAcrylic(_hwnd);
+        Tint.Visibility = acrylic && !Theme.IsDark ? Visibility.Visible : Visibility.Collapsed;
         if (acrylic)
             Background = Brushes.Transparent;
         else
@@ -184,9 +188,17 @@ internal sealed partial class PanelWindow : Window
         public uint Flags;
     }
 
-    /// Показать панель у области уведомлений и отдать ей фокус.
-    public void ShowPanel()
+    /// Идёт связывание: открыт режим, пришёл запрос или этот компьютер вводит код.
+    private bool PairingInProgress => Node.IsPairingMode || Node.IncomingPairing is not null || _outgoingPeer is not null;
+
+    /// Показать панель у области уведомлений и отдать ей фокус. Страница — настройки, если просили
+    /// или идёт связывание (блок связывания там), иначе главная.
+    public void ShowPanel(bool settings = false)
     {
+        if (settings || PairingInProgress)
+            _settingsPage = true;
+        else if (!IsVisible)
+            _settingsPage = false;
         _screen = Forms.Screen.FromPoint(Forms.Cursor.Position);
         var dpi = PanelPlacement.CursorMonitorDpi() ?? 96;
         // Панель не выше рабочей области экрана (в DIP этого экрана), дальше — прокрутка.
@@ -330,6 +342,25 @@ internal sealed partial class PanelWindow : Window
         RefreshContent();
     }
 
+    // MARK: - Страницы
+
+    private void OnOpenSettings(object sender, RoutedEventArgs e) => ShowPage(settings: true);
+
+    private void OnBack(object sender, RoutedEventArgs e) => ShowPage(settings: false);
+
+    private void ShowPage(bool settings)
+    {
+        if (_settingsPage == settings)
+            return;
+        // Уходя из настроек, сохранить набранное имя.
+        if (!settings)
+            CommitName();
+        _settingsPage = settings;
+        RefreshContent();
+        // Фокус — на кнопку возврата: с клавиатуры можно сразу вернуться (Enter/пробел).
+        Dispatcher.BeginInvoke(() => (settings ? BackButton : SettingsButton).Focus(), DispatcherPriority.Loaded);
+    }
+
     // MARK: - Содержимое
 
     public void RefreshContent()
@@ -340,6 +371,15 @@ internal sealed partial class PanelWindow : Window
         _updating = true;
         try
         {
+            MainPage.Visibility = Shown(!_settingsPage);
+            SettingsPage.Visibility = Shown(_settingsPage);
+            var settingsText = L("Настройки", "Settings");
+            SettingsPageTitle.Text = settingsText;
+            System.Windows.Automation.AutomationProperties.SetName(SettingsButton, settingsText);
+            SettingsButton.ToolTip = settingsText;
+            var backText = L("Назад", "Back");
+            System.Windows.Automation.AutomationProperties.SetName(BackButton, backText);
+            BackButton.ToolTip = backText;
             RefreshUpdateBanner();
             RefreshDevices();
             RefreshPairing();
@@ -366,8 +406,9 @@ internal sealed partial class PanelWindow : Window
         DevicesTitle.Text = L("Устройства", "Devices");
         DevicesNote.Text = devices.Count == 0 ? "" : L($"подключено {connected} из {devices.Count}", $"{connected} of {devices.Count} connected");
         NoDevicesCard.Visibility = Shown(devices.Count == 0);
-        NoDevicesText.Text = L("Свяжите этот компьютер с Mac или другим компьютером, и текст, скопированный на одном, можно будет вставить на другом.",
-            "Pair this PC with a Mac or another PC, and text you copy on one can be pasted on the other.");
+        NoDevicesText.Text = L("Нет связанных устройств. Связать новое устройство можно в настройках.",
+            "No paired devices. You can pair a new device in Settings.");
+        NoDevicesSettings.Content = L("Открыть настройки", "Open Settings");
         LastSyncText.Visibility = Shown(devices.Count > 0);
         LastSyncText.Text = UiText.LastSync(_app.LastSync);
 
@@ -540,6 +581,9 @@ internal sealed partial class PanelWindow : Window
     private void RefreshPairing()
     {
         PairingTitle.Text = L("Связывание", "Pairing");
+        // На главной во время связывания — строка-переход к нему.
+        PairingBar.Visibility = Shown(PairingInProgress);
+        PairingBarText.Text = L("Идёт связывание — продолжить", "Pairing in progress — continue");
         var incoming = Node.IncomingPairing;
         var mode = Node.IsPairingMode;
         PairIdle.Visibility = Shown(incoming is null && _outgoingPeer is null && !mode);
@@ -724,7 +768,7 @@ internal sealed partial class PanelWindow : Window
 
     private void RefreshSettings()
     {
-        SettingsTitle.Text = L("Настройки", "Settings");
+        GeneralTitle.Text = L("Основные", "General");
         NameTitle.Text = L("Имя этого компьютера", "This PC’s name");
         System.Windows.Automation.AutomationProperties.SetName(NameBox, NameTitle.Text);
         if (!_nameDirty)
