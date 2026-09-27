@@ -492,11 +492,6 @@ private struct DeviceNameField: View {
             .onChange(of: focused) { _, isFocused in
                 if !isFocused { model.commitNameInput() }
             }
-            Text(L("Так этот Mac видят другие устройства. Если оставить пустым — имя компьютера.",
-                   "Other devices see this Mac by this name. Leave empty to use the computer name."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { model.loadNameInput() }
         .onDisappear { model.commitNameInput() }

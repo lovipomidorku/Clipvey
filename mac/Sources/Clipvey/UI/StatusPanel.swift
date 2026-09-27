@@ -26,7 +26,6 @@ final class StatusBarController: NSObject, NSWindowDelegate {
     /// не должен открыть его снова.
     private var closedAt = Date.distantPast
     private var outsideClickMonitor: Any?
-    private var resizeScheduled = false
 
     var isShown: Bool { panel.isVisible }
     var window: NSWindow { panel }
@@ -94,17 +93,10 @@ final class StatusBarController: NSObject, NSWindowDelegate {
     private func contentHeightChanged(_ height: CGFloat) {
         guard height > 0, abs(height - contentHeight) > 0.5 else { return }
         contentHeight = height
-        guard panel.isVisible, !resizeScheduled else { return }
-        // Размер меняется на следующем обороте цикла событий: если за одно обновление SwiftUI сообщит
-        // несколько высот подряд, окно получит только последнюю.
-        resizeScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            resizeScheduled = false
-            guard panel.isVisible else { return }
-            panel.setFrame(frame(), display: true)
-            panel.invalidateShadow()
-        }
+        guard panel.isVisible else { return }
+        // Сразу, в том же обновлении, что и новое содержимое: тогда оба попадают в один кадр.
+        panel.setFrame(frame(), display: true)
+        panel.invalidateShadow()
     }
 
     /// Рамка окна: ширина содержимого, высота содержимого, верх — под значком.
