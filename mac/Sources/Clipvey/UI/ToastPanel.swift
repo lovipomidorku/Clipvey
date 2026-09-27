@@ -226,6 +226,7 @@ final class ToastController {
         let delay: TimeInterval
         switch toast.content {
         case .done: delay = FileTransfers.doneDuration
+        case .received: delay = FileTransfers.receivedDuration
         case .notice: delay = FileTransfers.noticeDuration
         default: return
         }
@@ -333,8 +334,8 @@ private struct ToastCard: View {
 
     private var showsClose: Bool {
         switch toast.content {
-        case .offer, .notice, .done: true
-        case .downloading, .failed: false
+        case .offer, .notice, .done, .received: true
+        case .downloading, .receiving, .failed: false
         }
     }
 
@@ -352,8 +353,8 @@ private struct ToastCard: View {
                     .buttonStyle(ToastButtonStyle(prominent: true))
                     .reportFrame("download")
             }
-        case .downloading:
-            Text(L("Загрузка \(quotedName)\(more)", "Downloading \(quotedName)\(more)"))
+        case .downloading, .receiving:
+            Text(progressTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -367,6 +368,18 @@ private struct ToastCard: View {
                 Button(L("Отмена", "Cancel")) { transfers.cancel(toast) }
                     .buttonStyle(ToastButtonStyle())
                     .reportFrame("cancel")
+            }
+        case .received:
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("Готово — можно вставлять", "Done — ready to paste"))
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.trailing, 16)
+                Text("\(quotedName)\(more)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.trailing, 16)
             }
         case .done(_, let inPasteboard):
             VStack(alignment: .leading, spacing: 2) {
@@ -445,6 +458,14 @@ private struct ToastCard: View {
         toast.moreCount > 0 ? L(" (+\(toast.moreCount) ещё)", " (+\(toast.moreCount) more)") : ""
     }
 
+    /// «Загрузка «отчёт.pdf»» после «Загрузить»; «Получение «отчёт.pdf» с OFFICE-PC» — тихое скачивание.
+    private var progressTitle: String {
+        if case .receiving = toast.content {
+            return L("Получение \(quotedName)\(more) с \(toast.deviceName)", "Receiving \(quotedName)\(more) from \(toast.deviceName)")
+        }
+        return L("Загрузка \(quotedName)\(more)", "Downloading \(quotedName)\(more)")
+    }
+
     /// «340 МБ из 1,2 ГБ · 45 МБ/с».
     private var progressText: String {
         var text = L("\(ByteText.string(toast.received)) из \(ByteText.string(toast.total))",
@@ -487,7 +508,7 @@ private struct ToastIcon: View {
     @ViewBuilder
     private var badge: some View {
         switch toast.content {
-        case .done:
+        case .done, .received:
             Image(systemName: "checkmark.circle.fill")
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(.white, .green)

@@ -5,7 +5,9 @@ import Observation
 /// - **отправка**: файлы и папки из буфера → описание другим устройствам (узел);
 /// - **получение не больше порога** (общая настройка «Скачивать автоматически», по умолчанию 50 МиБ): тихо, в фоне,
 ///   в кэш (Incoming/<id>), затем настоящие файлы — в буфер; новое содержимое буфера (с другого устройства или
-///   скопированное здесь) отменяет незаконченное скачивание;
+///   скопированное здесь) отменяет незаконченное скачивание. Если оно идёт дольше slowBackgroundDelay, появляется
+///   компактное окошко «Получение …» с полосой и «Отмена», по готовности — «Готово — можно вставлять» на пару
+///   секунд: иначе кажется, что вставляется прежнее («задержка на один»);
 /// - **получение больше порога**: окошко «Загрузить» → ~/Downloads/Clipvey, затем файлы — в буфер.
 ///
 /// Окошки — стопка FileToast, видно верхнее. Новое окошко ложится сверху, поэтому идущая загрузка не теряется:
@@ -17,6 +19,10 @@ final class FileTransfers {
     /// Сколько показывать «Готово» и сообщения об ошибках, если на окошко не навели мышь.
     static let doneDuration: TimeInterval = 6
     static let noticeDuration: TimeInterval = 10
+    /// Тихое скачивание дольше этого — окошко «Получение …»; быстрые проходят без окошка.
+    static let slowBackgroundDelay: Duration = .milliseconds(1500)
+    /// Сколько показывать «Готово — можно вставлять» после тихого скачивания с окошком.
+    static let receivedDuration: TimeInterval = 2.5
 
     /// Стопка окошек; видно последнее.
     private(set) var toasts: [FileToast] = []
@@ -144,6 +150,8 @@ final class FileTransfers {
         Log.files.info("Тихое скачивание \(background.offerID, privacy: .public) отменено: \(reason, privacy: .public)")
         background.task.cancel()
         self.background = nil
+        // Окошко «Получение …» убирается сразу, не дожидаясь, пока узел закончит отмену.
+        toasts.removeAll { $0.offer?.id == background.offerID && $0.isBackground }
     }
 
     private func dropOffers() {
@@ -151,26 +159,45 @@ final class FileTransfers {
     }
 
     /// Не больше порога: скачать в кэш и, если буфер за это время не менялся, положить в него файлы.
+    /// Дольше slowBackgroundDelay — окошко «Получение …» (прогресс, «Отмена»), затем «Готово — можно вставлять».
     private func startBackground(_ offer: FileOffer, deviceID: String, name: String) {
         let generation = bridge.changeCount
         let directory = IncomingCache.directory(root: cacheRoot, offerID: offer.id)
         let root = cacheRoot
-        let task = Task { [weak self] in
+        let toast = FileToast(offer: offer, deviceID: deviceID, deviceName: name, content: .receiving)
+        let task = Task { [weak self, toast] in
             guard let self else { return }
+            let reveal = Task { [weak self, weak toast] in
+                try? await Task.sleep(for: Self.slowBackgroundDelay)
+                guard !Task.isCancelled, let self, let toast, self.background?.offerID == offer.id else { return }
+                Log.files.info("Тихое скачивание \(offer.id, privacy: .public) идёт дольше 1,5 с — окошко «Получение»")
+                toast.startProgress(.receiving)
+                self.push(toast)
+            }
+            defer { reveal.cancel() }
             do {
                 try await Self.prepare(root, needed: offer.total)
-                let urls = try await node.downloadFiles(offer: offer, from: deviceID, to: directory)
+                let urls = try await node.downloadFiles(offer: offer, from: deviceID, to: directory) { received in
+                    toast.progress(received)
+                }
                 try Task.checkCancellation()
+                reveal.cancel()
                 background = nil
                 guard bridge.changeCount == generation else {
                     Log.files.info("Файлы \(offer.id, privacy: .public) скачаны, но буфер уже изменился — в буфер не кладутся")
                     TestHooks.emitIfEnabled("FILES_READY \(offer.id) \(urls.count) saved")
+                    remove(toast)
                     return
                 }
                 bridge.writeFiles(urls)
                 onSynced?(.received(from: name))
                 TestHooks.emitIfEnabled("FILES_READY \(offer.id) \(urls.count) pasteboard")
+                if toasts.contains(where: { $0 === toast }) {
+                    toast.finish(.received)
+                }
             } catch {
+                reveal.cancel()
+                remove(toast)
                 if background?.offerID == offer.id {
                     background = nil
                 }
@@ -180,6 +207,7 @@ final class FileTransfers {
                 showNotice(problem.receiveNotice(from: name))
             }
         }
+        toast.task = task
         background = (offer.id, task)
     }
 
@@ -258,13 +286,15 @@ final class FileTransfers {
         push(FileToast(offer: nil, deviceID: nil, deviceName: "", content: .notice(problem)))
     }
 
-    /// Закрыть окошко. Идущая загрузка при этом отменяется (как «Отмена»), окошко уберёт её итог.
+    /// Закрыть окошко. Идущая загрузка (и тихое скачивание с окошком) при этом отменяется, как «Отмена»;
+    /// окошко уберёт её итог.
     func dismiss(_ toast: FileToast) {
-        if case .downloading = toast.content {
-            toast.task?.cancel()
-            return
+        switch toast.content {
+        case .downloading, .receiving:
+            cancel(toast)
+        default:
+            remove(toast)
         }
-        remove(toast)
     }
 
     private func remove(_ toast: FileToast) {
@@ -272,6 +302,10 @@ final class FileTransfers {
     }
 
     func cancel(_ toast: FileToast) {
+        if case .receiving = toast.content, let id = toast.offer?.id, background?.offerID == id {
+            cancelBackground("нажата «Отмена»")
+            return
+        }
         toast.task?.cancel()
     }
 
@@ -333,6 +367,10 @@ final class FileToast: Identifiable {
         /// Больше порога «Скачивать автоматически»: «Загрузить» или закрыть.
         case offer
         case downloading
+        /// Тихое скачивание (не больше порога) идёт дольше 1,5 с: компактное «Получение …» с полосой и «Отмена».
+        case receiving
+        /// Тихое скачивание с окошком закончилось, файлы в буфере: «Готово — можно вставлять», исчезает само.
+        case received
         /// Загружено; inPasteboard — файлы положены в буфер.
         case done(urls: [URL], inPasteboard: Bool)
         /// Загрузка не удалась.
@@ -345,6 +383,8 @@ final class FileToast: Identifiable {
             switch self {
             case .offer: "offer"
             case .downloading: "progress"
+            case .receiving: "receiving"
+            case .received: "received"
             case .done: "done"
             case .failed: "failed"
             case .notice: "notice"
@@ -378,9 +418,18 @@ final class FileToast: Identifiable {
 
     var total: Int64 { offer?.total ?? 0 }
 
-    func startProgress() {
-        content = .downloading
-        samples = [(Date(), 0)]
+    /// Окошко тихого скачивания («Получение …», «Готово — можно вставлять»).
+    var isBackground: Bool {
+        switch content {
+        case .receiving, .received: true
+        default: false
+        }
+    }
+
+    func startProgress(_ content: Content = .downloading) {
+        self.content = content
+        // Тихое скачивание показывается не с начала: скорость считается с этой минуты.
+        samples = [(Date(), latest)]
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))

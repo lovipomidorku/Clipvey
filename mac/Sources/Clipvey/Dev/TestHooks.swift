@@ -42,7 +42,7 @@ import Network
 /// сценарий файлов — «FILES_SENT получателей id элементов байт», «FILES_REFUSED код»,
 /// «FILES_DONE id файлов байт мс», «FILES_FAILED id код». Файлы через буфер: «FILES_SENT …», «FILES_REFUSED код»,
 /// «FILES_READY id элементов pasteboard|saved» (скачано; положено в буфер или нет — буфер уже сменился),
-/// «FILES_FAILED id код»; окошко — «TOAST вид подробности» (offer id, progress id, done id pasteboard|saved,
+/// «FILES_FAILED id код»; окошко — «TOAST вид подробности» (offer id, progress id, receiving id и received id — медленное тихое скачивание, done id pasteboard|saved,
 /// failed код, notice код, hidden), «TOAST_CLICK кнопка ok|failed», «FILES_ENABLED 0».
 /// Общие настройки: «SETTINGS МиБ changed by» — изменились (здесь или пришли новее), «AUTO_DOWNLOAD_SET МиБ changed by»
 /// — после --set-auto-download-mb.
@@ -354,7 +354,7 @@ enum TestHooks {
         guard enabled else { return }
         let detail: String
         switch toast.content {
-        case .offer, .downloading:
+        case .offer, .downloading, .receiving, .received:
             detail = toast.offer?.id ?? "-"
         case .done(_, let inPasteboard):
             detail = "\(toast.offer?.id ?? "-") \(inPasteboard ? "pasteboard" : "saved")"
@@ -468,6 +468,16 @@ enum TestHooks {
         let receiveProblem = FileProblem(FileTransferError(.deviceUnavailable), deviceName: "OFFICE-PC", inDownloads: true)
         transfers.pushForDemo(FileToast(offer: nil, deviceID: nil, deviceName: "", content: .notice(receiveProblem.receiveNotice(from: "OFFICE-PC"))))
         await shot("10-notice-receive")
+        transfers.clearForDemo()
+        let quiet = FileOffer(id: "d0000000000000000000000000000004", items: [
+            .file("Файл 45 МБ.bin", size: 47_185_920), .file("заметки.txt", size: 2_000),
+        ], total: 47_187_920)
+        let quietToast = FileToast(offer: quiet, deviceID: nil, deviceName: "OFFICE-PC", content: .receiving)
+        transfers.pushForDemo(quietToast)
+        quietToast.setForDemo(.receiving, received: 21_000_000, speed: 5_200_000)
+        await shot("10a-receiving")
+        quietToast.setForDemo(.received)
+        await shot("10b-received")
         transfers.clearForDemo()
         let long = FileOffer(id: "d0000000000000000000000000000002", items: [
             .file("Очень длинное название документа, которое не помещается в одну строку — версия 3 (финальная).docx", size: 81_000_000),
