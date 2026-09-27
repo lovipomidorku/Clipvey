@@ -17,7 +17,7 @@ start_mac mac "$MAC_NAME" "e2e-pb-$SUFFIX" --rename-after 12 "$MAC_NEW"
 start_peer peer "$PEER_NAME" "$PEER_PORT" --rename-after 6 "$PEER_NEW" --send "от нового имени $SUFFIX" --send-delay 8
 expect "$WORK/mac.out" "^CONNECTED $PEER_NAME" 30 "Mac подключился"
 expect "$WORK/mac.out" "^RENAMED $PEER_NAME $PEER_NEW$" 30 "Mac увидел новое имя двойника"
-expect "$WORK/mac.out" "^INFO $PEER_NEW os=windows form=desktop caps=image$" 5 "Mac: info с новым именем"
+expect "$WORK/mac.out" "^INFO $PEER_NEW os=windows form=desktop caps=file,image$" 5 "Mac: info с новым именем"
 expect_clip mac "$WORK/mac.out" "$PEER_NEW" "от нового имени $SUFFIX" 15 "текст пришёл от нового имени"
 expect "$WORK/mac.out" "^NAME $MAC_NEW$" 30 "Mac сменил своё имя"
 expect "$WORK/peer.out" "^RENAMED $MAC_NAME $MAC_NEW$" 10 "двойник увидел новое имя Mac"

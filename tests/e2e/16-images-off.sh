@@ -19,7 +19,7 @@ start_mac mac "$MAC_NAME" "$BOARD" --images off
 MAC_PID=$LAST_PID
 start_peer peer "$PEER_NAME" "$PEER_PORT" --send-image "$IMAGE" --send-delay 2
 PEER_PID=$LAST_PID
-expect "$WORK/peer.out" "^INFO $MAC_NAME os=mac form=(laptop|desktop) caps=-$" 30 "двойник видит, что Mac картинки не принимает"
+expect "$WORK/peer.out" "^INFO $MAC_NAME os=mac form=(laptop|desktop) caps=file$" 30 "двойник видит, что Mac картинки не принимает"
 expect "$WORK/peer.out" "^IMAGE_SENT 0$" 20 "двойник не отправил картинку"
 pb write-image "$BOARD" "$IMAGE"
 sleep 3
@@ -33,7 +33,7 @@ stop "$MAC_PID"
 # Часть 2: картинки выключены у двойника.
 start_mac mac "$MAC_NAME" "$BOARD"
 start_peer peer "$PEER_NAME" "$PEER_PORT" --images off
-expect "$WORK/mac.out" "^INFO $PEER_NAME os=windows form=desktop caps=-$" 30 "Mac видит, что двойник картинки не принимает"
+expect "$WORK/mac.out" "^INFO $PEER_NAME os=windows form=desktop caps=file$" 30 "Mac видит, что двойник картинки не принимает"
 pb write-image "$BOARD" "$IMAGE"
 sleep 3
 pb write "$BOARD" "после картинки $SUFFIX"

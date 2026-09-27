@@ -27,10 +27,10 @@ B_PID=$LAST_PID
 start_peer c "$C_NAME" "$C_PORT" --save-images "$WORK/saved-c"
 C_PID=$LAST_PID
 expect "$WORK/b.out" "^CONNECTED $C_NAME" 30 "B подключён к C"
-expect "$WORK/b.out" "^INFO $C_NAME os=windows form=desktop caps=image$" 5 "B знает тип и caps C"
+expect "$WORK/b.out" "^INFO $C_NAME os=windows form=desktop caps=file,image$" 5 "B знает тип и caps C"
 start_peer a "$A_NAME" "$A_PORT" --os mac --form laptop --send-image "$IMAGE" --send-delay 2
 A_PID=$LAST_PID
-expect "$WORK/b.out" "^INFO $A_NAME os=mac form=laptop caps=image$" 30 "B знает тип и caps A"
+expect "$WORK/b.out" "^INFO $A_NAME os=mac form=laptop caps=file,image$" 30 "B знает тип и caps A"
 expect "$WORK/a.out" "^IMAGE_SENT 1$" 15 "A поставил картинку в очередь для B"
 expect_image "$WORK/b.out" "$A_NAME" "$IMAGE" 20 "B получил картинку A"
 expect_image "$WORK/c.out" "$B_NAME" "$IMAGE" 20 "C получил картинку A через B"
@@ -54,7 +54,7 @@ expect_count "$WORK/b.out" "^DISCONNECTED $A_NAME" 1 1 "A отключался �
 stop "$A_PID"
 stop "$C_PID"
 start_peer c "$C_NAME" "$C_PORT" --images off
-expect "$WORK/b.out" "^INFO $C_NAME os=windows form=desktop caps=-$" 30 "B видит, что C картинки не принимает"
+expect "$WORK/b.out" "^INFO $C_NAME os=windows form=desktop caps=file$" 30 "B видит, что C картинки не принимает"
 make_png "$WORK/image2.png" 300000 3
 start_peer a "$A_NAME-2" "$A_PORT" --send-image "$WORK/image2.png" --send-delay 2
 expect_image "$WORK/b.out" "$A_NAME-2" "$WORK/image2.png" 30 "B получил вторую картинку A"

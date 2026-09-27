@@ -500,3 +500,51 @@ expect_image() {
     sleep 1
     [ "$(count "$file" "$pattern")" -eq 1 ] || fail "$5: получено $(count "$file" "$pattern") раз"
 }
+
+# make_tree DIR [BIG_MB] — дерево для передачи файлов: кириллица и эмодзи в именах, пустая папка, пустой файл,
+# вложенные папки, случайные данные и большой файл BIG_MB МиБ (по умолчанию 150). Всё — прямо в DIR (верхний уровень).
+make_tree() {
+    local dir="$1" big="${2:-150}"
+    mkdir -p "$dir/Документы/пустая папка" "$dir/Документы/вложенная/ещё глубже"
+    printf 'Привет из Clipvey\n' > "$dir/Документы/отчёт.txt"
+    : > "$dir/Документы/пустой файл.txt"
+    head -c 3000000 /dev/urandom > "$dir/Документы/вложенная/ещё глубже/данные.bin"
+    head -c 1048576 /dev/urandom > "$dir/Документы/вложенная/ровно 1 МиБ.bin"
+    printf 'ёлка\n' > "$dir/ёлка 🎄.txt"
+    head -c $(( big * 1048576 )) /dev/urandom > "$dir/большой.bin"
+}
+
+# compare_tree EXPECTED ACTUAL — в ACTUAL те же папки и файлы (имена в NFC), что в EXPECTED, с теми же sha256.
+compare_tree() {
+    python3 - "$1" "$2" <<'PY' || fail "деревья $1 и $2 различаются"
+import hashlib, os, sys, unicodedata
+def walk(root):
+    result = {}
+    for base, dirs, files in os.walk(root):
+        rel = os.path.relpath(base, root)
+        for name in dirs:
+            result[unicodedata.normalize("NFC", os.path.normpath(os.path.join(rel, name)))] = "dir"
+        for name in files:
+            path = os.path.join(base, name)
+            digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+            result[unicodedata.normalize("NFC", os.path.normpath(os.path.join(rel, name)))] = f"{os.path.getsize(path)} {digest}"
+    return result
+expected, actual = walk(sys.argv[1]), walk(sys.argv[2])
+if expected != actual:
+    for key in sorted(set(expected) | set(actual)):
+        if expected.get(key) != actual.get(key):
+            print(f"  {key}: ожидалось {expected.get(key)}, получено {actual.get(key)}")
+    sys.exit(1)
+print(f"  одинаково: {sum(1 for v in expected.values() if v == 'dir')} папок, {sum(1 for v in expected.values() if v != 'dir')} файлов")
+PY
+}
+
+# files_speed FILE ID — скорость по строке «FILES_DONE ID файлов байт мс» в МБ/с (10^6 байт).
+files_speed() {
+    grep -E "^FILES_DONE $2 " "$1" | tail -n 1 | awk '{ if ($5 > 0) printf "%.0f МБ/с (%d байт за %d мс)", $4 / $5 / 1000, $4, $5; else print "?" }'
+}
+
+# offer_id FILE — id последнего отправленного описания («FILES_SENT получателей id …»).
+offer_id() {
+    grep -E "^FILES_SENT " "$1" | tail -n 1 | cut -d' ' -f3
+}

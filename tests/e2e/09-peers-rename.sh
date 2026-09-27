@@ -18,11 +18,11 @@ start_peer b "$B_NAME" "$B_PORT" --os windows --form laptop
 start_peer a "$A_NAME" "$A_PORT" --os mac --form desktop --rename-after 6 "$A_NEW" --send "после переименования $SUFFIX" --send-delay 9
 A_PID=$LAST_PID
 expect "$WORK/b.out" "^CONNECTED $A_NAME$" 30 "B подключён к A"
-expect "$WORK/b.out" "^INFO $A_NAME os=mac form=desktop caps=image$" 5 "B получил тип A из ready"
-expect "$WORK/a.out" "^INFO $B_NAME os=windows form=laptop caps=image$" 5 "A получил тип B из ready"
+expect "$WORK/b.out" "^INFO $A_NAME os=mac form=desktop caps=file,image$" 5 "B получил тип A из ready"
+expect "$WORK/a.out" "^INFO $B_NAME os=windows form=laptop caps=file,image$" 5 "A получил тип B из ready"
 expect "$WORK/a.out" "^NAME $A_NEW$" 20 "A сменил имя"
 expect "$WORK/b.out" "^RENAMED $A_NAME $A_NEW$" 10 "B увидел новое имя (info)"
-expect "$WORK/b.out" "^INFO $A_NEW os=mac form=desktop caps=image$" 5 "B: info с новым именем"
+expect "$WORK/b.out" "^INFO $A_NEW os=mac form=desktop caps=file,image$" 5 "B: info с новым именем"
 expect_clip peer "$WORK/b.out" "$A_NEW" "после переименования $SUFFIX" 15 "текст пришёл от нового имени"
 expect_absent "$WORK/b.out" "^DISCONNECTED" "сеанс не прерывался"
 
