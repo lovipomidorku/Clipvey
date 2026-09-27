@@ -111,7 +111,7 @@ private struct DevicesSection: View {
                        "Pair this Mac with another computer to copy text on one and paste it on the other."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fitsWindowHeight()
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(node.devices) { device in
@@ -253,7 +253,7 @@ private struct PairingSection: View {
                 Text(result.text)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fitsWindowHeight()
             }
         }
     }
@@ -294,7 +294,7 @@ private struct PairingSection: View {
                  ? L("«\(incoming.peerName)» подтвердил код ✓ Нажмите «Готово».", "“\(incoming.peerName)” confirmed the code ✓ Click Done.")
                  : L("Введите этот код на «\(incoming.peerName)».", "Enter this code on “\(incoming.peerName)”."))
                 .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+                .fitsWindowHeight()
             HStack {
                 Button(L("Готово", "Done")) { node.confirmIncoming() }
                     .disabled(!incoming.verified)
@@ -323,7 +323,7 @@ private struct PairingSection: View {
             case .enterCode:
                 Text(L("Введите код с экрана «\(name)»:", "Enter the code shown on “\(name)”:"))
                     .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fitsWindowHeight()
                 HStack {
                     TextField("000 000", text: Binding(
                         get: { model.codeInput },
@@ -339,7 +339,7 @@ private struct PairingSection: View {
             case .waitingConfirmation:
                 Text(L("Код верный ✓ Нажмите «Готово» на «\(name)».", "Code is correct ✓ Click Done on “\(name)”."))
                     .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fitsWindowHeight()
             }
             Button(L("Отмена", "Cancel")) { node.cancelOutgoing() }
         }
@@ -350,7 +350,7 @@ private struct PairingSection: View {
             Text(L("Нажмите «Связать» и на другом компьютере. Затем выберите его здесь или этот Mac — там.",
                     "Click Pair on the other computer too. Then choose it here, or choose this Mac there."))
                 .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+                .fitsWindowHeight()
             if node.candidates.isEmpty {
                 progress(L("Поиск устройств…", "Looking for devices…"))
             } else {
@@ -392,7 +392,7 @@ private struct AccessHint: View {
                     "macOS asks for permission when an app reads the clipboard. To stop the prompt on every copy, choose Always Allow for Clipvey in System Settings → Privacy & Security."))
                 .font(.caption)
                 .foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
+                .fitsWindowHeight()
             Button(L("Открыть настройки конфиденциальности", "Open Privacy Settings")) {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension") {
                     NSWorkspace.shared.open(url)
@@ -421,7 +421,7 @@ struct SettingsView: View {
                        "Up to 20 MB. Only to devices that have image sync turned on too."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fitsWindowHeight()
             }
             .cardStyle()
 
@@ -484,7 +484,7 @@ private struct DeviceNameField: View {
                    "Other devices see this Mac by this name. Leave empty to use the computer name."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .fitsWindowHeight()
         }
         .onAppear { model.loadNameInput() }
         .onDisappear { model.commitNameInput() }

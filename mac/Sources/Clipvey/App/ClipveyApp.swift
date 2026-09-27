@@ -163,6 +163,7 @@ final class AppModel {
         node.start()
         bridge.start()
         TestHooks.run(node)
+        TestHooks.probe(self)
         observeTooltip()
     }
 

@@ -36,6 +36,7 @@ enum TestHooks {
     private static var sendText: String?
     private static var sendDelay: Double = 0
     private static var exitAfter: Double?
+    private static var probeWindow = false
     static private(set) var updateURL: URL?
     static private(set) var updatePublicKey: String?
     static private(set) var updateNow = false
@@ -59,6 +60,7 @@ enum TestHooks {
         sendText = value("--send")
         sendDelay = value("--send-delay").flatMap(Double.init) ?? 0
         exitAfter = value("--exit-after").flatMap(Double.init)
+        probeWindow = arguments.contains("--probe-window")
         updateURL = value("--update-url").flatMap(URL.init(string:))
         updatePublicKey = value("--update-public-key")
         updateNow = arguments.contains("--update-now")
@@ -85,6 +87,48 @@ enum TestHooks {
     static func prepare(_ node: ClipveyNode) {
         guard enabled else { return }
         node.onEvent = { emit($0) }
+    }
+
+    /// --probe-window: открыть окошко значка, сходить в настройки и обратно, печатая положение окна
+    /// («WINDOW шаг top=… height=… statusBottom=…»). Для проверки подгонки высоты без мыши.
+    static func probe(_ model: AppModel) {
+        guard enabled, probeWindow else { return }
+        func report(_ step: String) {
+            let statusBottom = NSApp.windows.first { String(describing: type(of: $0)).contains("StatusBarWindow") }?.frame.minY ?? -1
+            for window in NSApp.windows where window.isVisible && !String(describing: type(of: window)).contains("StatusBarWindow") {
+                emit("WINDOW \(step) \(type(of: window)) top=\(Int(window.frame.maxY)) height=\(Int(window.frame.height)) statusBottom=\(Int(statusBottom))")
+            }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            for window in NSApp.windows where String(describing: type(of: window)).contains("StatusBarWindow") {
+                if let button = window.contentView.flatMap(findButton) {
+                    button.performClick(nil)
+                }
+            }
+            try? await Task.sleep(for: .seconds(1))
+            report("открыто")
+            for round in 1...2 {
+                model.page = .settings
+                try? await Task.sleep(for: .seconds(1))
+                report("настройки\(round)")
+                model.page = .main
+                try? await Task.sleep(for: .seconds(1))
+                report("главная\(round)")
+            }
+        }
+    }
+
+    private static func findButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton {
+            return button
+        }
+        for subview in view.subviews {
+            if let button = findButton(in: subview) {
+                return button
+            }
+        }
+        return nil
     }
 
     /// После запуска узла: выполнить сценарий из флагов.

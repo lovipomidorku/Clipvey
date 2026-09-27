@@ -5,54 +5,51 @@ extension View {
     /// Держит высоту окошка MenuBarExtra равной высоте содержимого.
     ///
     /// Окно MenuBarExtra само умеет только расти: после возврата из настроек оно оставалось
-    /// высоким, а содержимое съезжало вниз. Здесь содержимое прижимается к верху, а разница
-    /// между высотой окна и высотой содержимого убирается изменением размера окна.
+    /// высоким, а содержимое съезжало вниз. Здесь высота окна выставляется прямо равной высоте
+    /// содержимого, а верхний край привязывается к строке меню.
     func fitsWindowHeight() -> some View {
         fixedSize(horizontal: false, vertical: true)
             .background(GeometryReader { proxy in
-                Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
-            })
-            .frame(maxHeight: .infinity, alignment: .top)
-            .backgroundPreferenceValue(ContentHeightKey.self) { contentHeight in
-                GeometryReader { proxy in
-                    // В `--render-preview` окна нет, а NSView рисуется заглушкой.
-                    if AppInfo.isBundled && contentHeight > 0 {
-                        WindowHeightFitter(excessHeight: proxy.size.height - contentHeight)
-                    }
+                // В `--render-preview` окна нет, а NSView рисуется заглушкой.
+                if AppInfo.isBundled {
+                    WindowHeightFitter(contentHeight: proxy.size.height)
                 }
-            }
+            })
     }
 }
 
-private struct ContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// Меняет высоту окна на excessHeight (положительное — окно выше содержимого),
-/// оставляя верхний край на месте, у строки меню.
+/// Ставит высоту окна равной contentHeight, верхний край — сразу под строкой меню.
 private struct WindowHeightFitter: NSViewRepresentable {
-    let excessHeight: CGFloat
+    let contentHeight: CGFloat
+
+    /// Окно MenuBarExtra стоит на столько точек ниже строки меню.
+    private static let gapBelowMenuBar: CGFloat = 2
 
     func makeNSView(context: Context) -> NSView {
         NSView()
     }
 
     func updateNSView(_ view: NSView, context: Context) {
-        guard abs(excessHeight) > 0.5, let window = view.window else { return }
-        // Целевую высоту считаем сразу: повторные вызовы до применения дадут ту же цель,
-        // и окно не ужмётся дважды.
-        let targetHeight = window.frame.height - excessHeight
-        Task { @MainActor [weak window] in
-            guard let window, abs(window.frame.height - targetHeight) > 0.5 else { return }
-            var frame = window.frame
-            frame.origin.y += frame.height - targetHeight
-            frame.size.height = targetHeight
-            window.setFrame(frame, display: true)
-            Log.app.debug("Высота окна подогнана под содержимое: \(targetHeight, format: .fixed(precision: 0))")
+        let height = contentHeight
+        guard height > 0 else { return }
+        // Сразу и ещё раз чуть позже: MenuBarExtra после смены содержимого может сам вернуть окну прежний размер.
+        for delay in [0.0, 0.15] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak view] in
+                guard let window = view?.window else { return }
+                Self.fit(window, height: height)
+            }
         }
+    }
+
+    @MainActor
+    private static func fit(_ window: NSWindow, height: CGFloat) {
+        let statusBar = NSApp.windows.first { String(describing: type(of: $0)).contains("StatusBarWindow") }
+        let top = statusBar.map { $0.frame.minY - gapBelowMenuBar } ?? window.frame.maxY
+        var frame = window.frame
+        guard abs(frame.height - height) > 0.5 || abs(frame.maxY - top) > 0.5 else { return }
+        frame.size.height = height
+        frame.origin.y = top - height
+        window.setFrame(frame, display: true)
+        Log.app.debug("Окно: высота \(height, format: .fixed(precision: 0)), верх \(top, format: .fixed(precision: 0))")
     }
 }
