@@ -17,6 +17,8 @@ namespace Clipvey.Windows;
 /// - картинка — если картинки можно отправлять и текста нет или это одна ссылка;
 ///   формат PNG как есть, иначе CF_DIBV5 / CF_DIB, переведённый в PNG;
 /// - иначе текст.
+/// То же содержимое повторно в течение 2 с после отправки не уходит (RepeatedCopyFilter): программы на WinForms
+/// одно копирование делают двумя изменениями буфера.
 ///
 /// Файлы с другого устройства: небольшие — настоящие (CF_HDROP на скачанное), большие — «виртуальные»
 /// (свой IDataObject через OleSetClipboard, VirtualFiles.cs).
@@ -57,6 +59,9 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     /// Номер последней записи с другого устройства: запись картинки после перевода отменяется, если есть новее.
     private int _writeGeneration;
 
+    /// Повтор только что отправленного не отправляется; запись с другого устройства сбрасывает отсчёт.
+    private readonly RepeatedCopyFilter _repeats = new();
+
     /// Виртуальные файлы, которые мы положили в буфер (OleSetClipboard): ссылку держим сами, пока они там.
     private VirtualFileDataObject? _virtualFiles;
 
@@ -85,6 +90,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     public void WriteRemote(string text)
     {
         _writeGeneration++;
+        _repeats.Reset();
         var data = new DataObject();
         data.SetData(DataFormats.UnicodeText, text.Replace("\r\n", "\n").Replace("\n", "\r\n"));
         data.SetData(RemoteFormatName, "1");
@@ -106,6 +112,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     public void WriteRemoteImage(byte[] data, string mime)
     {
         var generation = ++_writeGeneration;
+        _repeats.Reset();
         var sequence = GetClipboardSequenceNumber();
         var jpeg = mime == "image/jpeg";
         Task.Run(() => DecodeToDib(data, jpeg)).ContinueWith(task => _ui.Post(_ =>
@@ -147,6 +154,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
             return false;
         }
         var generation = ++_writeGeneration;
+        _repeats.Reset();
         List<(uint Format, byte[] Data)> formats =
         [
             (CfHdrop, DropFiles(paths)),
@@ -172,6 +180,7 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
     public bool PlaceVirtualFiles(VirtualFileDataObject data)
     {
         ++_writeGeneration;
+        _repeats.Reset();
         if (!OleClipboard.Set(data))
             return false;
         _virtualFiles = data;
@@ -374,16 +383,32 @@ internal sealed class ClipboardWatcher : NativeWindow, IDisposable
 
         if (snapshot.Files is { Count: > 0 } files)
         {
-            _onCopyFiles(files);
+            if (!IsRepeat(RepeatedCopyFilter.FilesKey(files), "файлы"))
+                _onCopyFiles(files);
             return;
         }
         if (snapshot.Image is { } image)
         {
-            SendImage(image, snapshot.ImageFormat, snapshot.Formats);
+            if (!IsRepeat(RepeatedCopyFilter.ImageKey(image), "картинка"))
+                SendImage(image, snapshot.ImageFormat, snapshot.Formats);
             return;
         }
         if (snapshot.Text is { Length: > 0 } text)
-            _onCopy(text.Replace("\r\n", "\n"));
+        {
+            var normalized = text.Replace("\r\n", "\n");
+            if (!IsRepeat(RepeatedCopyFilter.TextKey(normalized), "текст"))
+                _onCopy(normalized);
+        }
+    }
+
+    /// Одно копирование бывает двумя изменениями буфера подряд (так делают программы на WinForms): то же
+    /// содержимое в течение 2 с после отправки второй раз не отправляется.
+    private bool IsRepeat(byte[] key, string what)
+    {
+        if (!_repeats.IsRepeat(key))
+            return false;
+        Log.Write($"Буфер: {what} — то же, что только что, повтор не отправляется");
+        return true;
     }
 
     /// Буфер открыт. Сначала только список форматов и текст: картинку запрашиваем, лишь если отправлять будем её —

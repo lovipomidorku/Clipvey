@@ -84,20 +84,10 @@ internal sealed class FileTransfers
 
     // MARK: - Отправка
 
-    /// Последние отправленные пути и когда: одно копирование бывает двумя изменениями буфера подряд
-    /// (программа кладёт данные и сразу «закрепляет» их, OleFlushClipboard) — второе не отправляется.
-    private (string[] Paths, long Time)? _lastSent;
-
     /// Скопированы файлы и папки: отправить описание устройствам с «file». Ошибки — в окошке.
+    /// Повтор того же копирования (второе изменение буфера) сюда не доходит: его отсекает ClipboardWatcher.
     public async void Send(IReadOnlyList<string> paths)
     {
-        var now = Environment.TickCount64;
-        if (_lastSent is { } last && now - last.Time < 2000 && last.Paths.SequenceEqual(paths, StringComparer.OrdinalIgnoreCase))
-        {
-            Log.Write("Файлы из буфера: те же, что только что, — повтор не отправляется");
-            return;
-        }
-        _lastSent = ([.. paths], now);
         Log.Write($"Файлы из буфера: {paths.Count} элементов верхнего уровня");
         FileOfferResult result;
         try
