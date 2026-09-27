@@ -76,9 +76,6 @@ internal sealed partial class ToastWindow : Window
         Theme.Changed += ApplyBackdrop;
     }
 
-    /// Показано ли сейчас это сообщение.
-    public bool Shows(object key) => IsVisible && ReferenceEquals(_key, key);
-
     /// Показать сообщение key. То же сообщение с новым видом (загрузка закончилась) — на месте, без мигания;
     /// прогресс и скорость при этом считаются заново, только если прогресса раньше не было.
     public void Show(object key, ToastView view)
@@ -126,6 +123,7 @@ internal sealed partial class ToastWindow : Window
             _tick.Start();
         }
         _autoHide.Stop();
+        _hovered = false;
         if (view.AutoHide is { } lifetime)
         {
             _autoHide.Interval = lifetime;
