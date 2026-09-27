@@ -104,22 +104,15 @@ final class AppModel {
         }
     }
 
-    var keepAwake: Bool {
-        didSet {
-            Settings.keepAwake = keepAwake
-            updateSleepGuard()
-        }
-    }
-
     @ObservationIgnored let bridge: PasteboardBridge
-    @ObservationIgnored private let sleepGuard = SleepGuard()
 
     init() {
         let directory = TestHooks.dataDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clipvey")
         let pasteboard = TestHooks.pasteboardName.map { NSPasteboard(name: NSPasteboard.Name($0)) } ?? .general
         bridge = PasteboardBridge(pasteboard: pasteboard)
-        keepAwake = Settings.keepAwake
+        // Настройка «Не давать Mac засыпать» убрана — стираем её след.
+        UserDefaults.standard.removeObject(forKey: "keepAwake")
         do {
             let identity = try DeviceIdentity.loadOrCreate(at: directory.appendingPathComponent("identity.key"))
             node = ClipveyNode(
@@ -146,7 +139,6 @@ final class AppModel {
             self?.bridge.writeImage(data, mime: mime)
             self?.lastSync = LastSync(date: Date(), direction: .received(from: from), kind: .image)
         }
-        node.onConnectionsChanged = { [weak self] _ in self?.updateSleepGuard() }
         bridge.shouldRead = { [weak node] in node?.devices.contains(where: \.connected) ?? false }
         bridge.shouldReadImages = { [weak node] in
             guard let node, node.imagesEnabled else { return false }
@@ -291,10 +283,5 @@ final class AppModel {
             try? await Task.sleep(for: .milliseconds(500))
             self?.applyTooltip()
         }
-    }
-
-    private func updateSleepGuard() {
-        let connected = node?.devices.contains(where: \.connected) ?? false
-        sleepGuard.setActive(keepAwake && connected, reason: "Clipvey: синхронизация буфера обмена с другими устройствами")
     }
 }

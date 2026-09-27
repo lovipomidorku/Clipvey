@@ -441,7 +441,6 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                SettingsToggle(title: L("Не давать Mac засыпать, пока подключены устройства", "Keep Mac awake while devices are connected"), isOn: $model.keepAwake)
                 LanguagePicker()
             }
             .cardStyle()

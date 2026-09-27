@@ -66,16 +66,27 @@ struct UpdateSettingsSection: View {
                 .controlSize(.small)
                 .disabled(updater.phase != .idle || updater.currentVersion == nil)
             }
-            if let release = updater.available, updater.dismissed {
-                Button(L("Обновить до \(release.version.description)", "Update to \(release.version.description)")) {
-                    Task { await updater.install() }
+            // Обновление ставится и отсюда: после «Проверить сейчас» не нужно возвращаться на главную к полосе.
+            if let release = updater.available {
+                switch updater.phase {
+                case .downloading, .installing:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(updater.phase == .downloading
+                             ? L("Загрузка и проверка…", "Downloading and verifying…")
+                             : L("Установка…", "Installing…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                case .idle, .checking:
+                    Button(L("Обновить до \(release.version.description)", "Update to \(release.version.description)")) {
+                        Task { await updater.install() }
+                    }
+                    .controlSize(.small)
+                    .disabled(updater.phase != .idle)
                 }
-                .controlSize(.small)
-                .disabled(updater.phase != .idle)
             }
-            if !updater.showsBanner {
-                UpdateNoticeText()
-            }
+            UpdateNoticeText()
         }
     }
 }

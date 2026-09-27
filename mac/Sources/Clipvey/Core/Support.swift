@@ -2,7 +2,6 @@
 @_exported import ClipveyProtocol
 import Foundation
 import IOKit.ps
-import IOKit.pwr_mgt
 import os
 
 /// Журнал. Смотреть: log stream --predicate 'subsystem == "io.github.lovipomidorku.clipvey"' --level info
@@ -56,36 +55,8 @@ enum AppInfo {
     }
 }
 
-/// Не даёт Mac засыпать от бездействия, пока активен (например, пока подключены другие устройства).
-@MainActor
-final class SleepGuard {
-    private var assertionID: IOPMAssertionID = 0
-    private(set) var isActive = false
-
-    func setActive(_ active: Bool, reason: String) {
-        if active && !isActive {
-            let result = IOPMAssertionCreateWithName(
-                kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
-                IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                reason as CFString,
-                &assertionID)
-            isActive = result == kIOReturnSuccess
-            Log.app.info("Запрет сна: \(self.isActive ? "включён" : "не удалось включить", privacy: .public)")
-        } else if !active && isActive {
-            IOPMAssertionRelease(assertionID)
-            isActive = false
-            Log.app.info("Запрет сна снят")
-        }
-    }
-}
-
 /// Настройки приложения в UserDefaults.
 enum Settings {
-    static var keepAwake: Bool {
-        get { UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "keepAwake") }
-    }
-
     /// Своё имя устройства, заданное пользователем; nil — имя компьютера.
     static var deviceName: String? {
         get { UserDefaults.standard.string(forKey: "deviceName").flatMap { $0.isEmpty ? nil : $0 } }
