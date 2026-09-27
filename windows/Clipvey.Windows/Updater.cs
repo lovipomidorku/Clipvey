@@ -283,7 +283,7 @@ internal sealed class Updater : IDisposable
             catch (Exception e)
             {
                 Phase = UpdatePhase.Idle;
-                Fail(UpdateNotice.InstallFailed, $"замена exe: {e.Message}");
+                Fail(UpdateNotice.InstallFailed, $"замена exe ({exe}): {e.GetType().Name}: {e.Message}");
                 return;
             }
         }

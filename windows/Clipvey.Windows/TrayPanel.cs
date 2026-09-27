@@ -256,10 +256,40 @@ internal sealed partial class TrayPanel : Form
     {
         base.OnDeactivate(e);
         if (Visible && !IsPairingActive)
+            BeginInvoke(HideIfFocusLeftApp);
+    }
+
+    /// Прятать панель, только если фокус ушёл в другую программу. Меню «⋯» и выбор языка — отдельные окна,
+    /// а перестройка панели уничтожает элемент с фокусом: это тоже снимает активность, но фокус остаётся в Clipvey.
+    private async void HideIfFocusLeftApp()
+    {
+        await Task.Delay(120);
+        if (!Visible || IsPairingActive || ActiveForm == this)
+            return;
+        var foreground = GetForegroundWindow();
+        GetWindowThreadProcessId(foreground, out var process);
+        if (foreground == IntPtr.Zero || process == (uint)Environment.ProcessId)
         {
-            HiddenAt = Environment.TickCount64;
-            Hide();
+            Log.Write($"Панель: активность ушла в окно Clipvey или никуда ({WindowClass(foreground)}) — не прячем");
+            return;
         }
+        HiddenAt = Environment.TickCount64;
+        Hide();
+    }
+
+    /// После закрытия меню вернуть активность панели, чтобы следующий клик мимо её спрятал.
+    private void ReactivateAfterMenu() => BeginInvoke(() =>
+    {
+        if (Visible && !IsDisposed)
+            Activate();
+    });
+
+    private static string WindowClass(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+            return "нет окна";
+        var name = new System.Text.StringBuilder(256);
+        return GetClassName(window, name, name.Capacity) > 0 ? name.ToString() : "?";
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -950,7 +980,11 @@ internal sealed partial class TrayPanel : Form
             RefreshContent();
         });
         menu.Items.Add(unpair);
-        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Closed += (_, _) =>
+        {
+            BeginInvoke(menu.Dispose);
+            ReactivateAfterMenu();
+        };
         menu.Show(anchor, new Point(anchor.Width, anchor.Height), ToolStripDropDownDirection.BelowLeft);
     }
 
@@ -964,7 +998,11 @@ internal sealed partial class TrayPanel : Form
             item.Click += (_, _) => BeginInvoke(() => Localization.Set(value));
             menu.Items.Add(item);
         }
-        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Closed += (_, _) =>
+        {
+            BeginInvoke(menu.Dispose);
+            ReactivateAfterMenu();
+        };
         menu.Show(anchor, new Point(0, anchor.Height));
     }
 
@@ -1066,4 +1104,13 @@ internal sealed partial class TrayPanel : Form
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int capacity);
 }
