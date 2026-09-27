@@ -75,6 +75,23 @@ internal static class AppSettings
         set => Write("imagesEnabled", JsonValue.Create(value));
     }
 
+    /// «Передавать файлы» (по умолчанию включено).
+    public static bool FilesEnabled
+    {
+        get
+        {
+            try
+            {
+                return Data["filesEnabled"]?.GetValue<bool>() ?? true;
+            }
+            catch (Exception e) when (e is InvalidOperationException or FormatException)
+            {
+                return true;
+            }
+        }
+        set => Write("filesEnabled", JsonValue.Create(value));
+    }
+
     private static string? Read(string key)
     {
         try

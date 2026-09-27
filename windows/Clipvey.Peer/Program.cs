@@ -21,9 +21,18 @@
 //   --ignore-image-limit  отправить картинку и больше 20 МиБ (проверка отказа у получателя)
 //   --save-images DIR   сохранять полученные картинки в DIR (имя — sha256 и расширение)
 //   --rename-after N NAME  через N секунд после запуска сменить своё имя
+//   --files off         выключить «Передавать файлы»
+//   --send-files ПУТЬ [ПУТЬ…]  после подключения (и --send-delay) отправить описание файлов и папок
+//   --save-files DIR    каждое пришедшее описание скачивать целиком в DIR/<id>/
+//   --save-mode stream  скачивать не DownloadFilesAsync, а через OpenFileStream (как Проводник: кусками по 64 КиБ,
+//                       до 4 файлов одновременно)
+//   --save-delay N      начинать скачивание через N секунд после описания
+//   --cancel-files-after N  отменить скачивание, когда получено N байт
 // События: READY, PAIRING_CODE, PAIRED, PAIRING_FAILED <код>, CONNECTED, DISCONNECTED, CLIP, SENT,
 //   IMAGE <от кого> <размер> <sha256 hex>, IMAGE_SENT <получателей>, INFO <имя> os=… form=… caps=…,
-//   RENAMED <старое> <новое>, NAME <своё новое имя>.
+//   RENAMED <старое> <новое>, NAME <своё новое имя>,
+//   FILE_OFFER <от кого> <id> <элементов> <байт>, FILES_SENT <получателей> <id> <элементов> <байт>, FILES_REFUSED <код>,
+//   FILES_DONE <id> <файлов> <байт> <мс>, FILES_FAILED <id> <код>.
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -38,6 +47,12 @@ string? Option(string name)
     return index >= 0 && index + 1 < arguments.Count ? arguments[index + 1] : null;
 }
 bool Flag(string name) => arguments.Contains(name);
+// Значения флага до следующего «--…»: --send-files a b c.
+List<string> Values(string name)
+{
+    var index = arguments.IndexOf(name);
+    return index < 0 ? [] : arguments.Skip(index + 1).TakeWhile(value => !value.StartsWith("--")).ToList();
+}
 
 var outputLock = new object();
 void Emit(string line)
@@ -80,7 +95,8 @@ switch (command)
 }
 
 var deviceType = new DeviceType(Option("--os") ?? "windows", Option("--form") ?? "desktop");
-await using var node = new ClipveyNode(identity, store, deviceName, port, deviceType, imagesEnabled: Option("--images") != "off");
+await using var node = new ClipveyNode(identity, store, deviceName, port, deviceType,
+    imagesEnabled: Option("--images") != "off", filesEnabled: Option("--files") != "off");
 using var finished = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
 // kill (SIGTERM) и Ctrl+C завершают штатно: узел закрывается и рассылает mDNS-«прощание».
 // Иначе запись двойника ещё 2 минуты висит в кэше mDNS у других устройств.
@@ -111,6 +127,13 @@ node.PeerUpdated += update =>
         Emit($"RENAMED {update.OldName} {update.Name}");
     var caps = update.Caps.Count > 0 ? string.Join(',', update.Caps) : "-";
     Emit($"INFO {update.Name} os={update.Type.Os ?? "-"} form={update.Type.Form ?? "-"} caps={caps}");
+};
+node.FileOffered += received =>
+{
+    var offer = received.Offer;
+    Emit($"FILE_OFFER {received.DeviceName} {offer.Id} {offer.Items.Count} {offer.Total}");
+    if (Option("--save-files") is { } saveDirectory)
+        _ = Task.Run(() => SaveFilesAsync(received, saveDirectory));
 };
 var lastConnected = new HashSet<string>();
 node.Changed += () =>
@@ -165,7 +188,8 @@ if (Option("--pair-with") is { } target)
     });
 }
 
-if (Option("--send") is not null || Option("--send-image") is not null)
+var filesToSend = Values("--send-files");
+if (Option("--send") is not null || Option("--send-image") is not null || filesToSend.Count > 0)
 {
     _ = Task.Run(async () =>
     {
@@ -185,6 +209,13 @@ if (Option("--send") is not null || Option("--send-image") is not null)
             var mime = Path.GetExtension(imageFile).ToLowerInvariant() is ".jpg" or ".jpeg" ? "image/jpeg" : "image/png";
             var recipients = node.SendImage(await File.ReadAllBytesAsync(imageFile), mime, Flag("--ignore-image-limit"));
             Emit($"IMAGE_SENT {recipients}");
+        }
+        if (filesToSend.Count > 0)
+        {
+            var result = await node.OfferFilesAsync(filesToSend);
+            Emit(result.Offer is { } offer
+                ? $"FILES_SENT {result.Recipients} {offer.Id} {offer.Items.Count} {offer.Total}"
+                : $"FILES_REFUSED {result.Failure}");
         }
     });
 }
@@ -211,6 +242,67 @@ catch (OperationCanceledException)
 Emit("EXIT");
 return 0;
 
+// Скачать описание целиком в DIR/<id>/: DownloadFilesAsync или (--save-mode stream) через OpenFileStream.
+async Task SaveFilesAsync(FileOfferReceived received, string saveDirectory)
+{
+    var offer = received.Offer;
+    try
+    {
+        if (int.TryParse(Option("--save-delay"), out var delay))
+            await Task.Delay(TimeSpan.FromSeconds(delay), finished.Token);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(finished.Token);
+        var cancelAfter = long.TryParse(Option("--cancel-files-after"), out var limit) ? limit : long.MaxValue;
+        var target = IncomingCache.DirectoryFor(saveDirectory, offer.Id);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        if (Option("--save-mode") == "stream")
+            await StreamFilesAsync(received, target, cancelAfter, cancel);
+        else
+        {
+            await node.DownloadFilesAsync(offer, received.DeviceId, target, new SyncProgress(total =>
+            {
+                if (total >= cancelAfter)
+                    cancel.Cancel();
+            }), cancel.Token);
+        }
+        Emit($"FILES_DONE {offer.Id} {offer.FileCount} {offer.Total} {stopwatch.ElapsedMilliseconds}");
+    }
+    catch (Exception e)
+    {
+        Log.Write($"Скачивание {offer.Id}: {e.Message}");
+        Emit($"FILES_FAILED {offer.Id} {FileTransferFailures.Of(e)}");
+    }
+}
+
+// Как Проводник с виртуальными файлами: каждый файл — поток, читается кусками по 64 КиБ, до 4 файлов одновременно.
+async Task StreamFilesAsync(FileOfferReceived received, string target, long cancelAfter, CancellationTokenSource cancel)
+{
+    var offer = received.Offer;
+    var local = FileNames.LocalPaths(offer.Items, OperatingSystem.IsWindows());
+    Directory.CreateDirectory(target);
+    for (var index = 0; index < offer.Items.Count; index++)
+    {
+        if (offer.Items[index].IsDirectory)
+            Directory.CreateDirectory(Path.Combine(target, local[index]));
+    }
+    long total = 0;
+    await Parallel.ForEachAsync(
+        Enumerable.Range(0, offer.Items.Count).Where(index => !offer.Items[index].IsDirectory),
+        new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancel.Token },
+        async (index, ct) =>
+        {
+            await using var source = node.OpenFileStream(offer, received.DeviceId, index, ct);
+            await using var destination = File.Create(Path.Combine(target, local[index]));
+            var buffer = new byte[64 * 1024];
+            int read;
+            while ((read = await source.ReadAsync(buffer, ct)) > 0)
+            {
+                await destination.WriteAsync(buffer.AsMemory(0, read), ct);
+                if (Interlocked.Add(ref total, read) >= cancelAfter)
+                    cancel.Cancel();
+            }
+        });
+}
+
 async Task<DiscoveredDevice> WaitForCandidateAsync(ClipveyNode clipvey, string nameFragment, CancellationToken ct)
 {
     while (true)
@@ -235,4 +327,10 @@ async Task<string?> ReadCodeAsync(CancellationToken ct)
             return match.Groups[1].Value;
         await Task.Delay(200, ct);
     }
+}
+
+/// IProgress без переноса в контекст синхронизации: вызывается прямо из потока сеанса.
+sealed class SyncProgress(Action<long> report) : IProgress<long>
+{
+    public void Report(long value) => report(value);
 }

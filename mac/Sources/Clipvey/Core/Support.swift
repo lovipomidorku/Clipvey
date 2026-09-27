@@ -10,6 +10,7 @@ enum Log {
     static let app = Logger(subsystem: subsystem, category: "app")
     static let network = Logger(subsystem: subsystem, category: "network")
     static let clipboard = Logger(subsystem: subsystem, category: "clipboard")
+    static let files = Logger(subsystem: subsystem, category: "files")
 }
 
 enum AppInfo {
@@ -67,6 +68,12 @@ enum Settings {
     static var imagesEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "imagesEnabled") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "imagesEnabled") }
+    }
+
+    /// «Передавать файлы» (по умолчанию включено).
+    static var filesEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "filesEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "filesEnabled") }
     }
 
     static var language: AppLanguage {

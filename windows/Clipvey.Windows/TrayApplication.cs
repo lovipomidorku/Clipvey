@@ -60,7 +60,7 @@ internal sealed class TrayApplication
         // Тип устройства: ноутбук, если есть батарея.
         var form = Forms.SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(Forms.BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
         _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
-            deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled);
+            deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled, filesEnabled: AppSettings.FilesEnabled);
         _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage,
             shouldRead: () => _node.Devices.Any(device => device.Connected),
             shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages));
@@ -138,6 +138,13 @@ internal sealed class TrayApplication
     {
         AppSettings.ImagesEnabled = enabled;
         _node.SetImagesEnabled(enabled);
+    }
+
+    /// «Передавать файлы»: сохранить и передать узлу. Переключателя в интерфейсе пока нет.
+    public void SetFilesEnabled(bool enabled)
+    {
+        AppSettings.FilesEnabled = enabled;
+        _node.SetFilesEnabled(enabled);
     }
 
     /// Открыть режим связывания (из панели и из меню значка) и запомнить срок для обратного отсчёта.

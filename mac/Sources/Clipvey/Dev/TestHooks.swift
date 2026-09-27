@@ -19,12 +19,24 @@ import Network
 ///   --update-check-delay N первая автоматическая проверка через N секунд вместо 60
 ///   --images off           выключить «Передавать картинки» (настройка не сохраняется)
 ///   --rename-after N NAME  через N секунд после запуска сменить своё имя
-/// Узел печатает также «INFO имя os=… form=… caps=…», «RENAMED старое новое», «IMAGE от размер sha256hex».
+///   --files off            выключить «Передавать файлы» (настройка не сохраняется)
+///   --send-files ПУТЬ…     после подключения (и --send-delay) отправить описание файлов и папок (пути — до следующего «--…»)
+///   --save-files DIR       каждое пришедшее описание скачивать целиком в DIR/<id>/
+///   --save-delay N         начинать скачивание через N секунд после описания
+///   --cancel-files-after N отменить скачивание, когда получено N байт
+/// Узел печатает также «INFO имя os=… form=… caps=…», «RENAMED старое новое», «IMAGE от размер sha256hex»,
+/// «FILE_OFFER от id элементов байт»; сценарий файлов — «FILES_SENT получателей id элементов байт», «FILES_REFUSED код»,
+/// «FILES_DONE id файлов байт мс», «FILES_FAILED id код».
 @MainActor
 enum TestHooks {
     static private(set) var enabled = false
     static private(set) var autoConfirm = false
     static private(set) var imagesEnabled = true
+    static private(set) var filesEnabled = true
+    private static var sendFiles: [String] = []
+    private static var saveFiles: String?
+    private static var saveDelay: Double = 0
+    private static var cancelFilesAfter: Int64?
     private static var renameAfter: (seconds: Double, name: String)?
     static private(set) var dataDirectory: URL?
     static private(set) var pasteboardName: String?
@@ -68,6 +80,13 @@ enum TestHooks {
         updateNow = arguments.contains("--update-now")
         updateCheckDelay = value("--update-check-delay").flatMap(Double.init)
         imagesEnabled = value("--images") != "off"
+        filesEnabled = value("--files") != "off"
+        if let index = arguments.firstIndex(of: "--send-files") {
+            sendFiles = Array(arguments[(index + 1)...].prefix { !$0.hasPrefix("--") })
+        }
+        saveFiles = value("--save-files")
+        saveDelay = value("--save-delay").flatMap(Double.init) ?? 0
+        cancelFilesAfter = value("--cancel-files-after").flatMap { Int64($0) }
         if let index = arguments.firstIndex(of: "--rename-after"), index + 2 < arguments.count,
            let seconds = Double(arguments[index + 1]) {
             renameAfter = (seconds, arguments[index + 2])
@@ -89,7 +108,39 @@ enum TestHooks {
     static func prepare(_ node: ClipveyNode) {
         guard enabled else { return }
         node.onEvent = { emit($0) }
+        if let saveFiles {
+            let previous = node.onFileOffer
+            node.onFileOffer = { [weak node] offer, deviceID, from in
+                previous?(offer, deviceID, from)
+                guard let node else { return }
+                Task { await save(offer, from: deviceID, node: node, into: URL(fileURLWithPath: saveFiles)) }
+            }
+        }
     }
+
+    /// --save-files: скачать описание целиком в DIR/<id>/ и напечатать итог.
+    private static func save(_ offer: FileOffer, from deviceID: String, node: ClipveyNode, into directory: URL) async {
+        try? await Task.sleep(for: .seconds(saveDelay))
+        let started = Date()
+        let limit = cancelFilesAfter
+        let download = Task { @MainActor in
+            try await node.downloadFiles(offer: offer, from: deviceID, to: IncomingCache.directory(root: directory, offerID: offer.id)) { total in
+                if let limit, total >= limit {
+                    cancelCurrentDownload?()
+                }
+            }
+        }
+        cancelCurrentDownload = { download.cancel() }
+        do {
+            _ = try await download.value
+            emit("FILES_DONE \(offer.id) \(offer.fileCount) \(offer.total) \(Int(Date().timeIntervalSince(started) * 1000))")
+        } catch {
+            emit("FILES_FAILED \(offer.id) \(FileTransferFailure(of: error).code)")
+        }
+    }
+
+    /// Отменить скачивание --save-files (для --cancel-files-after).
+    private static var cancelCurrentDownload: (() -> Void)?
 
     /// --probe-window: открыть окошко значка, сходить в настройки и обратно, печатая положение окна
     /// («WINDOW шаг top=… height=… statusBottom=…»). Для проверки подгонки высоты без мыши.
@@ -161,14 +212,24 @@ enum TestHooks {
                 }
             }
         }
-        if let sendText {
+        if sendText != nil || !sendFiles.isEmpty {
             Task {
                 while !node.devices.contains(where: \.connected) {
                     try? await Task.sleep(for: .milliseconds(200))
                 }
                 try? await Task.sleep(for: .seconds(sendDelay))
-                node.broadcast(sendText)
-                emit("SENT")
+                if let sendText {
+                    node.broadcast(sendText)
+                    emit("SENT")
+                }
+                if !sendFiles.isEmpty {
+                    switch await node.offerFiles(sendFiles.map { URL(fileURLWithPath: $0) }) {
+                    case .offered(let offer, let recipients):
+                        emit("FILES_SENT \(recipients) \(offer.id) \(offer.items.count) \(offer.total)")
+                    case .failed(let failure):
+                        emit("FILES_REFUSED \(failure.code)")
+                    }
+                }
             }
         }
         if let renameAfter {

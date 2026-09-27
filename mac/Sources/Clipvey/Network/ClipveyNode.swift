@@ -7,6 +7,7 @@ import Observation
 /// - слушает TCP и объявляет себя через Bonjour, ищет другие устройства;
 /// - держит с каждым связанным включённым устройством не больше одного сеанса;
 /// - пересылает фрагменты буфера (текст и картинки) между устройствами;
+/// - передаёт файлы по запросу (NodeFiles.swift);
 /// - ведёт связывание в обеих ролях.
 /// Правила — docs/protocol.md; логика совпадает с Clipvey.Core на C#.
 /// Интерфейсу узел отдаёт коды (FailureReason, PairingResult), а не готовые строки.
@@ -25,6 +26,8 @@ final class ClipveyNode {
         let connected: Bool
         /// Есть сеанс, и в его caps есть image: картинки этому устройству отправляются.
         let acceptsImages: Bool
+        /// Есть сеанс, и в его caps есть file: описания файлов этому устройству отправляются.
+        let acceptsFiles: Bool
         /// Почему не удаётся подключиться (если известно). Текст подбирает интерфейс.
         let problem: FailureReason?
 
@@ -87,21 +90,30 @@ final class ClipveyNode {
     let deviceType: DeviceType
     /// «Передавать картинки»: заявлять image в caps, принимать и отправлять картинки. Меняется через setImagesEnabled.
     private(set) var imagesEnabled: Bool
+    /// «Передавать файлы»: заявлять file в caps, принимать и отправлять описания файлов. Меняется через setFilesEnabled
+    /// (NodeFiles.swift; поэтому не private(set)).
+    var filesEnabled: Bool
 
     /// Пришёл текст с другого устройства (переводы строк — \n) и имя устройства, от которого он пришёл.
     @ObservationIgnored var onClipReceived: ((_ text: String, _ from: String) -> Void)?
     /// Пришла картинка (image/png или image/jpeg, sha256 проверен) и имя устройства, от которого она пришла.
     @ObservationIgnored var onImageReceived: ((_ data: Data, _ mime: String, _ from: String) -> Void)?
+    /// Пришло описание файлов: описание, deviceID источника (для downloadFiles) и имя устройства (псевдоним, если задан).
+    /// Описание — новое содержимое буфера, как текст.
+    @ObservationIgnored var onFileOffer: ((_ offer: FileOffer, _ deviceID: String, _ from: String) -> Void)?
     /// Изменилось число подключённых устройств.
     @ObservationIgnored var onConnectionsChanged: ((Int) -> Void)?
     /// Для самопроверки: события строками вида «CONNECTED имя».
     @ObservationIgnored var onEvent: ((String) -> Void)?
 
-    @ObservationIgnored private let store: DeviceStore
+    @ObservationIgnored let store: DeviceStore
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var listenerUsesDefaultPort = true
     @ObservationIgnored private var browser: NWBrowser?
-    @ObservationIgnored private var sessions: [String: ActiveSession] = [:]
+    @ObservationIgnored var sessions: [String: ActiveSession] = [:]
+    /// Свои описания файлов: id → описание и локальные файлы (NodeFiles.swift).
+    @ObservationIgnored var fileOffers: [String: OfferRecord] = [:]
+    @ObservationIgnored var latestFileOfferID: String?
     @ObservationIgnored private var browseResults: [String: BrowseResult] = [:]
     @ObservationIgnored private var disconnectedSince: [String: Date] = [:]
     @ObservationIgnored private var retryAfter: [String: Date] = [:]
@@ -125,12 +137,13 @@ final class ClipveyNode {
         let type: DeviceType
     }
 
-    init(identity: DeviceIdentity, name: String, deviceType: DeviceType, imagesEnabled: Bool, store: DeviceStore) {
+    init(identity: DeviceIdentity, name: String, deviceType: DeviceType, imagesEnabled: Bool, filesEnabled: Bool, store: DeviceStore) {
         self.identity = identity
         let normalized = Self.normalizedName(name)
         self.name = normalized.isEmpty ? "Mac" : normalized
         self.deviceType = deviceType
         self.imagesEnabled = imagesEnabled
+        self.filesEnabled = filesEnabled
         self.store = store
         refreshDevices()
     }
@@ -223,10 +236,13 @@ final class ClipveyNode {
     }
 
     private var ownInfo: PeerInfo {
-        PeerInfo(name: name, type: deviceType, caps: imagesEnabled ? [ProtocolLimits.imageCapability] : [])
+        var caps: [String] = []
+        if imagesEnabled { caps.append(ProtocolLimits.imageCapability) }
+        if filesEnabled { caps.append(ProtocolLimits.fileCapability) }
+        return PeerInfo(name: name, type: deviceType, caps: caps)
     }
 
-    private func sendInfoToAll() {
+    func sendInfoToAll() {
         let info = ownInfo
         for session in sessions.values {
             let link = session.link
@@ -234,7 +250,7 @@ final class ClipveyNode {
         }
     }
 
-    private func refreshDevices() {
+    func refreshDevices() {
         let list = store.devices.map { device in
             DeviceStatus(
                 id: device.deviceID,
@@ -244,6 +260,7 @@ final class ClipveyNode {
                 enabled: device.enabled,
                 connected: sessions[device.deviceID] != nil,
                 acceptsImages: sessions[device.deviceID]?.caps.contains(ProtocolLimits.imageCapability) ?? false,
+                acceptsFiles: sessions[device.deviceID]?.caps.contains(ProtocolLimits.fileCapability) ?? false,
                 problem: problems[device.deviceID])
         }
         if list != devices {
@@ -252,7 +269,7 @@ final class ClipveyNode {
         onConnectionsChanged?(sessions.count)
     }
 
-    private func displayName(_ session: ActiveSession) -> String {
+    func displayName(_ session: ActiveSession) -> String {
         store.device(id: session.peerID)?.alias ?? session.peerName
     }
 
@@ -826,6 +843,20 @@ final class ClipveyNode {
                     handleBlobChunk(id: id, seq: seq, data: data, from: session)
                 case .blobEnd(let id):
                     handleBlobEnd(id: id, from: session)
+                case .fileOffer(let offer):
+                    handleFileOffer(offer, from: session)
+                case .fileGet(let id, let req, let index, let offset):
+                    await handleFileGet(id: id, req: req, index: index, offset: offset, from: session)
+                case .fileEnd(let req, let size):
+                    await session.files.end(req: req, size: size)
+                case .fileError(let req, let reason):
+                    session.files.fail(req: req, reason: reason)
+                case .fileCancel(let req):
+                    await session.files.server.cancel(req)
+                case .fileChunk(let req, let data):
+                    await session.files.chunk(req: req, data: data)
+                case .invalidFileMessage(let type, let reason):
+                    Log.files.notice("\(type, privacy: .public) от «\(session.peerName, privacy: .public)» пропущено: \(reason, privacy: .public)")
                 case .ping:
                     try await link.send(.pong)
                 case .pong:
@@ -842,6 +873,7 @@ final class ClipveyNode {
         link.cancel()
         session.outgoingImages.removeAll()
         session.incomingBlob = nil
+        await session.files.stop()
         if sessions[session.peerID] === session {
             sessions[session.peerID] = nil
             disconnectedSince[session.peerID] = Date()
@@ -1112,7 +1144,7 @@ private enum IncomingBlob {
 
 /// Сеанс с устройством. Живёт на главном потоке вместе с узлом.
 @MainActor
-private final class ActiveSession {
+final class ActiveSession {
     let link: PeerLink
     let peerID: String
     var peerName: String
@@ -1120,9 +1152,11 @@ private final class ActiveSession {
     /// Последний известный caps другой стороны (из ready, затем из info).
     var caps: Set<String>
     var lastReceived = Date()
-    var incomingBlob: IncomingBlob?
-    var outgoingImages: [OutgoingImage] = []
+    fileprivate var incomingBlob: IncomingBlob?
+    fileprivate var outgoingImages: [OutgoingImage] = []
     var imageSender: Task<Void, Never>?
+    /// Файлы этого сеанса: обслуживание file_get и приём кусков (NodeFiles.swift).
+    let files: SessionFiles
 
     init(link: PeerLink, peerID: String, peerName: String, initiatorID: String, caps: Set<String>) {
         self.link = link
@@ -1130,5 +1164,6 @@ private final class ActiveSession {
         self.peerName = peerName
         self.initiatorID = initiatorID
         self.caps = caps
+        files = SessionFiles(link: link, peerName: peerName)
     }
 }

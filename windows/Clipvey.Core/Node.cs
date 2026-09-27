@@ -10,6 +10,7 @@ namespace Clipvey.Core;
 /// Name — имя, которое устройство сообщает о себе; Alias — локальный псевдоним (SetAlias), null — нет.
 /// Problem — почему не удаётся подключиться (если известно); текст подбирает интерфейс.
 /// AcceptsImages — есть сеанс и в его caps есть image: картинки этому устройству отправляются.
+/// AcceptsFiles — есть сеанс и в его caps есть file: описания файлов этому устройству отправляются.
 public sealed record DeviceStatus(
     string DeviceId,
     string Name,
@@ -18,7 +19,8 @@ public sealed record DeviceStatus(
     FailureReason? Problem,
     string? Alias = null,
     DeviceType? Type = null,
-    bool AcceptsImages = false)
+    bool AcceptsImages = false,
+    bool AcceptsFiles = false)
 {
     /// Что показывать: псевдоним или имя.
     public string DisplayName => Alias ?? Name;
@@ -31,10 +33,11 @@ public sealed record PeerUpdate(string DeviceId, string OldName, string Name, De
 /// - слушает TCP и объявляет себя через mDNS;
 /// - находит связанные устройства и держит с каждым не больше одного сеанса;
 /// - пересылает фрагменты буфера (текст и картинки);
+/// - передаёт файлы по запросу (NodeFiles.cs);
 /// - ведёт связывание в обеих ролях.
 /// Правила — docs/protocol.md. События вызываются из фоновых потоков.
-/// Узел платформенно-нейтральный: имя, тип устройства и «Передавать картинки» задаёт и хранит приложение.
-public sealed class ClipveyNode : IAsyncDisposable
+/// Узел платформенно-нейтральный: имя, тип устройства, «Передавать картинки» и «Передавать файлы» задаёт и хранит приложение.
+public sealed partial class ClipveyNode : IAsyncDisposable
 {
     /// Сколько картинок может ждать отправки в одном сеансе; при переполнении отбрасывается самая старая.
     private const int MaxQueuedImages = 3;
@@ -65,14 +68,15 @@ public sealed class ClipveyNode : IAsyncDisposable
     private string _name;
     private volatile bool _imagesEnabled;
 
-    /// deviceType — свои os и form; imagesEnabled — «Передавать картинки» при запуске.
+    /// deviceType — свои os и form; imagesEnabled и filesEnabled — «Передавать картинки» и «Передавать файлы» при запуске.
     public ClipveyNode(
         Identity identity,
         DeviceStore store,
         string name,
         int preferredPort = Protocol.DefaultPort,
         DeviceType? deviceType = null,
-        bool imagesEnabled = true)
+        bool imagesEnabled = true,
+        bool filesEnabled = true)
     {
         _identity = identity;
         _store = store;
@@ -81,6 +85,7 @@ public sealed class ClipveyNode : IAsyncDisposable
         _name = normalized.Length > 0 ? normalized : "Clipvey";
         DeviceType = deviceType ?? DeviceType.Unknown;
         _imagesEnabled = imagesEnabled;
+        _filesEnabled = filesEnabled;
     }
 
     public string DeviceId => _identity.DeviceId;
@@ -197,7 +202,8 @@ public sealed class ClipveyNode : IAsyncDisposable
                             _problems.TryGetValue(device.DeviceId, out var problem) ? problem : null,
                             device.Alias,
                             device.Type,
-                            session?.Caps.Contains(Protocol.ImageCapability) ?? false);
+                            session?.Caps.Contains(Protocol.ImageCapability) ?? false,
+                            session?.Caps.Contains(Protocol.FileCapability) ?? false);
                     })
                     .ToList();
             }
@@ -278,7 +284,18 @@ public sealed class ClipveyNode : IAsyncDisposable
         Changed?.Invoke();
     }
 
-    private PeerInfo OwnInfo => new(Name, DeviceType, _imagesEnabled ? [Protocol.ImageCapability] : []);
+    private PeerInfo OwnInfo
+    {
+        get
+        {
+            List<string> caps = [];
+            if (_imagesEnabled)
+                caps.Add(Protocol.ImageCapability);
+            if (_filesEnabled)
+                caps.Add(Protocol.FileCapability);
+            return new PeerInfo(Name, DeviceType, caps);
+        }
+    }
 
     private void SendInfoToAll()
     {
@@ -913,6 +930,7 @@ public sealed class ClipveyNode : IAsyncDisposable
         Log.Write($"Сеанс с «{info.PeerName}» установлен ({(info.InitiatorId == DeviceId ? "исходящий" : "входящий")})");
         if (info.Peer.Name != info.PeerName)
             Log.Write($"«{info.Peer.Name}» теперь называется «{info.PeerName}»");
+        session.Files.Start(_stop.Token);
         _ = Task.Run(() => RunSessionAsync(session));
         Changed?.Invoke();
         PeerUpdated?.Invoke(Update(session, info.Peer.Name));
@@ -975,11 +993,19 @@ public sealed class ClipveyNode : IAsyncDisposable
                     Log.Write($"Двоичный кадр от «{session.PeerName}» пропущен: {invalid}");
                     continue;
                 }
+                if (frame.IsChunk)
+                {
+                    session.Files.OnChunk(frame);
+                    continue;
+                }
                 if (frame.Message is not { } message)
                     continue;
 
                 switch (Messages.Type(message))
                 {
+                    case "file_offer" or "file_get" or "file_end" or "file_error" or "file_cancel":
+                        HandleFileMessage(message, session);
+                        break;
                     case "clip":
                         HandleClip(message, session);
                         break;
@@ -1035,6 +1061,7 @@ public sealed class ClipveyNode : IAsyncDisposable
                 }
             }
             session.Receiving = null;
+            session.Files.Stop();
             await info.Channel.DisposeAsync();
             if (removed)
             {
@@ -1254,6 +1281,9 @@ public sealed class ClipveyNode : IAsyncDisposable
         public string? SkippingId { get; set; }
         public Queue<OutgoingImage> Outgoing { get; } = new();
         public bool Sending { get; set; }
+        /// Файлы этого сеанса: обслуживание file_get и приём кусков (NodeFiles.cs). Создаётся в Adopt до цикла приёма.
+        public SessionFiles Files => _files ??= new SessionFiles(this);
+        private SessionFiles? _files;
 
         public void Close()
         {

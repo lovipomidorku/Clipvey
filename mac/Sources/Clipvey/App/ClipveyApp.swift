@@ -145,6 +145,7 @@ final class AppModel {
                 name: TestHooks.deviceName ?? Settings.deviceName ?? AppInfo.deviceName,
                 deviceType: AppInfo.deviceType,
                 imagesEnabled: TestHooks.enabled ? TestHooks.imagesEnabled : Settings.imagesEnabled,
+                filesEnabled: TestHooks.enabled ? TestHooks.filesEnabled : Settings.filesEnabled,
                 store: DeviceStore(directory: directory))
             startupError = nil
         } catch {
@@ -249,6 +250,17 @@ final class AppModel {
                 Settings.imagesEnabled = newValue
             }
             node?.setImagesEnabled(newValue)
+        }
+    }
+
+    /// «Передавать файлы». Переключателя в интерфейсе пока нет; настройка хранится в UserDefaults (filesEnabled).
+    var filesEnabled: Bool {
+        get { node?.filesEnabled ?? Settings.filesEnabled }
+        set {
+            if !TestHooks.enabled {
+                Settings.filesEnabled = newValue
+            }
+            node?.setFilesEnabled(newValue)
         }
     }
 
