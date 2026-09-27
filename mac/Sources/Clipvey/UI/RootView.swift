@@ -19,8 +19,7 @@ struct RootView: View {
             Divider()
             footer
         }
-        .frame(width: 340)
-        .fitsWindowHeight()
+        .frame(width: StatusBarController.width)
     }
 
     private var header: some View {

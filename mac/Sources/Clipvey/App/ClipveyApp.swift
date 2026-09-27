@@ -13,23 +13,21 @@ enum Entry {
 struct ClipveyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// Значок и окошко — свои (StatusBarController), сцена SwiftUI нужна только формально.
     var body: some Scene {
-        MenuBarExtra {
-            RootView()
-                .environment(appDelegate.model)
-                .environment(LaunchAtLogin.shared)
-        } label: {
-            MenuBarLabel(model: appDelegate.model)
+        SwiftUI.Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
+    private var statusBar: StatusBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        statusBar = StatusBarController(model: model)
         model.start()
         Updater.shared.start()
     }
@@ -164,7 +162,6 @@ final class AppModel {
         bridge.start()
         TestHooks.run(node)
         TestHooks.probe(self)
-        observeTooltip()
     }
 
     // MARK: - Имя и картинки (настройки хранит приложение, узел только применяет)
@@ -255,34 +252,9 @@ final class AppModel {
         return "\(AppInfo.displayName) — \(state)"
     }
 
-    @ObservationIgnored private var tooltip = ""
-    @ObservationIgnored private var tooltipAttempts = 0
-
-    /// Обновляет подсказку при каждом изменении того, из чего она складывается.
-    private func observeTooltip() {
-        tooltip = withObservationTracking {
-            guard let lastSyncText else { return statusSummary }
-            return "\(statusSummary)\n\(L("Последняя синхронизация", "Last sync")): \(lastSyncText)"
-        } onChange: { [weak self] in
-            Task { @MainActor in self?.observeTooltip() }
-        }
-        tooltipAttempts = 0
-        applyTooltip()
-    }
-
-    /// Кнопка значка появляется не сразу после запуска: несколько раз пробуем ещё.
-    private func applyTooltip() {
-        if StatusItemTooltip.set(tooltip) {
-            return
-        }
-        tooltipAttempts += 1
-        guard tooltipAttempts <= 10 else {
-            Log.app.info("Подсказка значка: кнопка в строке меню не найдена")
-            return
-        }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            self?.applyTooltip()
-        }
+    /// Подсказка при наведении на значок: состояние и последняя синхронизация.
+    var tooltip: String {
+        guard let lastSyncText else { return statusSummary }
+        return "\(statusSummary)\n\(L("Последняя синхронизация", "Last sync")): \(lastSyncText)"
     }
 }

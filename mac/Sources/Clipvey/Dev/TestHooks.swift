@@ -94,23 +94,19 @@ enum TestHooks {
     static func probe(_ model: AppModel) {
         guard enabled, probeWindow else { return }
         func report(_ step: String) {
+            guard let controller = StatusBarController.shared else { return }
+            let window = controller.window
             let statusBottom = NSApp.windows.first { String(describing: type(of: $0)).contains("StatusBarWindow") }?.frame.minY ?? -1
-            for window in NSApp.windows where window.isVisible && !String(describing: type(of: window)).contains("StatusBarWindow") {
-                emit("WINDOW \(step) \(type(of: window)) top=\(Int(window.frame.maxY)) height=\(Int(window.frame.height)) statusBottom=\(Int(statusBottom))")
-            }
+            emit("WINDOW \(step) visible=\(controller.isShown) x=\(Int(window.frame.minX)) top=\(Int(window.frame.maxY)) height=\(Int(window.frame.height)) statusBottom=\(Int(statusBottom))")
         }
         Task {
             try? await Task.sleep(for: .seconds(1.5))
-            for window in NSApp.windows where String(describing: type(of: window)).contains("StatusBarWindow") {
-                if let button = window.contentView.flatMap(findButton) {
-                    button.performClick(nil)
-                }
-            }
+            StatusBarController.shared?.show()
             try? await Task.sleep(for: .seconds(1))
             report("открыто")
             // Каждое изменение рамки окна — чтобы увидеть промежуточные рывки при смене страницы.
             let start = Date()
-            for window in NSApp.windows where String(describing: type(of: window)).contains("MenuBarExtraWindow") {
+            if let window = StatusBarController.shared?.window {
                 for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
                     NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { note in
                         guard let window = note.object as? NSWindow else { return }
@@ -127,18 +123,6 @@ enum TestHooks {
                 report("главная\(round)")
             }
         }
-    }
-
-    private static func findButton(in view: NSView) -> NSButton? {
-        if let button = view as? NSButton {
-            return button
-        }
-        for subview in view.subviews {
-            if let button = findButton(in: subview) {
-                return button
-            }
-        }
-        return nil
     }
 
     /// После запуска узла: выполнить сценарий из флагов.
