@@ -290,7 +290,7 @@ internal sealed class TrayApplication
         if (_trayState == state && ReferenceEquals(_tray.Icon, icon))
             return;
         if (_trayState != state)
-            Log.Write($"Значок трея: {state}");
+            Log.Write($"Значок трея: {state}, {icon.Width}×{icon.Height}");
         _trayState = state;
         _tray.Icon = icon;
         _icons.ReleaseStale();

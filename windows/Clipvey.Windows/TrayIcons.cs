@@ -10,13 +10,13 @@ namespace Clipvey.Windows;
 /// Состояние, которое показывает значок в трее.
 internal enum TrayState
 {
-    /// Нет подключений (или нет связанных устройств): обычный значок.
+    /// Нет подключений (или нет связанных устройств): значок в оттенках серого.
     Idle,
 
-    /// Есть хотя бы одно подключение: зелёная точка в углу.
+    /// Есть хотя бы одно подключение: обычный цветной значок.
     Connected,
 
-    /// Синхронизация выключена со всеми связанными устройствами: серый перечёркнутый значок.
+    /// Синхронизация выключена со всеми связанными устройствами: серый полупрозрачный значок.
     AllDisabled,
 }
 
@@ -99,45 +99,24 @@ internal sealed class TrayIcons : IDisposable
 
         using var source = AppIcon.LoadBitmap(Math.Max(size.Width, size.Height));
         var bounds = new Rectangle(Point.Empty, size);
-        if (state == TrayState.AllDisabled)
+        if (state == TrayState.Connected)
         {
-            // Серый и полупрозрачный значок.
-            using var attributes = new ImageAttributes();
-            attributes.SetColorMatrix(new ColorMatrix(
-            [
-                [0.30f, 0.30f, 0.30f, 0, 0],
-                [0.59f, 0.59f, 0.59f, 0, 0],
-                [0.11f, 0.11f, 0.11f, 0, 0],
-                [0, 0, 0, 0.55f, 0],
-                [0, 0, 0, 0, 1],
-            ]));
-            graphics.DrawImage(source, bounds, 0, 0, source.Width, source.Height, GraphicsUnit.Pixel, attributes);
-
-            // Перечёркивание из угла в угол: светлая подложка, чтобы черта читалась на тёмной и светлой панели задач.
-            var width = Math.Max(1.5f, size.Width / 8f);
-            var inset = size.Width / 8f;
-            var from = new PointF(inset, size.Height - inset);
-            var to = new PointF(size.Width - inset, inset);
-            using var halo = new Pen(Color.FromArgb(230, 255, 255, 255), width + 2) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            using var line = new Pen(Color.FromArgb(255, 200, 40, 40), width) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            graphics.DrawLine(halo, from, to);
-            graphics.DrawLine(line, from, to);
+            graphics.DrawImage(source, bounds);
             return canvas;
         }
 
-        graphics.DrawImage(source, bounds);
-        if (state == TrayState.Connected)
-        {
-            // Зелёная точка в правом нижнем углу с белой обводкой.
-            var diameter = Math.Max(6f, size.Width * 0.45f);
-            var dot = new RectangleF(size.Width - diameter, size.Height - diameter, diameter, diameter);
-            using var ring = new SolidBrush(Color.White);
-            using var fill = new SolidBrush(Color.FromArgb(255, 22, 163, 74));
-            graphics.FillEllipse(ring, dot);
-            var border = Math.Max(1f, diameter / 6f);
-            dot.Inflate(-border, -border);
-            graphics.FillEllipse(fill, dot);
-        }
+        // Без подключений — обесцвеченный значок, всё выключено — ещё и полупрозрачный.
+        var alpha = state == TrayState.AllDisabled ? 0.55f : 1f;
+        using var attributes = new ImageAttributes();
+        attributes.SetColorMatrix(new ColorMatrix(
+        [
+            [0.30f, 0.30f, 0.30f, 0, 0],
+            [0.59f, 0.59f, 0.59f, 0, 0],
+            [0.11f, 0.11f, 0.11f, 0, 0],
+            [0, 0, 0, alpha, 0],
+            [0, 0, 0, 0, 1],
+        ]));
+        graphics.DrawImage(source, bounds, 0, 0, source.Width, source.Height, GraphicsUnit.Pixel, attributes);
         return canvas;
     }
 
