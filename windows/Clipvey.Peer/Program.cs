@@ -30,11 +30,15 @@
 //   --cancel-files-after N  отменить скачивание, когда получено N байт
 //   --drop-after-bytes N    один раз закрыть сеанс (как при обрыве), когда отдано N байт файлов; дальше — обычное
 //                       переподключение, получатель продолжает с того же места
+//   --auto-download-mb N    изменить общую настройку «Скачивать автоматически» (МиБ), как пользователь
+//   --settings-delay N      сделать это через N секунд после запуска (по умолчанию сразу)
+//   Общие настройки хранятся в DIR/shared-settings.json (как settings.json у приложения).
 // События: READY, PAIRING_CODE, PAIRED, PAIRING_FAILED <код>, CONNECTED, DISCONNECTED, CLIP, SENT,
 //   IMAGE <от кого> <размер> <sha256 hex>, IMAGE_SENT <получателей>, INFO <имя> os=… form=… caps=…,
 //   RENAMED <старое> <новое>, NAME <своё новое имя>,
 //   FILE_OFFER <от кого> <id> <элементов> <байт>, FILES_SENT <получателей> <id> <элементов> <байт>, FILES_REFUSED <код>,
-//   FILES_DONE <id> <файлов> <байт> <мс>, FILES_FAILED <id> <код>.
+//   FILES_DONE <id> <файлов> <байт> <мс>, FILES_FAILED <id> <код>,
+//   SETTINGS <МиБ> <changed> <by> — общие настройки изменились (здесь или пришли новее).
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -97,8 +101,9 @@ switch (command)
 }
 
 var deviceType = new DeviceType(Option("--os") ?? "windows", Option("--form") ?? "desktop");
+var settingsFile = Path.Combine(dataDirectory, "shared-settings.json");
 await using var node = new ClipveyNode(identity, store, deviceName, port, deviceType,
-    imagesEnabled: Option("--images") != "off", filesEnabled: Option("--files") != "off");
+    imagesEnabled: Option("--images") != "off", filesEnabled: Option("--files") != "off", settings: LoadSettings());
 if (long.TryParse(Option("--drop-after-bytes"), out var dropAfterBytes))
     node.DropSessionOnceAfterFileBytes(dropAfterBytes);
 using var finished = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -113,6 +118,17 @@ using var onTerminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop
 using var onInterrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, StopOnSignal);
 
 node.ClipReceived += (text, from) => Emit($"CLIP {from} {JsonSerializer.Serialize(text)}");
+node.SettingsChanged += settings =>
+{
+    // Как приложение: сохранить все три поля, чтобы после перезапуска сравнивать с тем же changed и by.
+    File.WriteAllText(settingsFile, JsonSerializer.Serialize(new Dictionary<string, object>
+    {
+        ["autoDownloadMB"] = settings.AutoDownloadMB,
+        ["autoDownloadChanged"] = settings.Changed,
+        ["autoDownloadBy"] = settings.By,
+    }));
+    Emit($"SETTINGS {settings}");
+};
 node.PairingSucceeded += peer => Emit($"PAIRED {peer}");
 node.PairingFailed += reason => Emit($"PAIRING_FAILED {reason}");
 node.ImageReceived += (data, mime, from) =>
@@ -224,6 +240,17 @@ if (Option("--send") is not null || Option("--send-image") is not null || filesT
     });
 }
 
+if (int.TryParse(Option("--auto-download-mb"), out var autoDownloadMB))
+{
+    _ = Task.Run(async () =>
+    {
+        if (double.TryParse(Option("--settings-delay"), System.Globalization.CultureInfo.InvariantCulture, out var delay))
+            await Task.Delay(TimeSpan.FromSeconds(delay), finished.Token);
+        node.SetAutoDownloadMB(autoDownloadMB);
+        Emit($"AUTO_DOWNLOAD_SET {node.Settings}");
+    });
+}
+
 if (arguments.IndexOf("--rename-after") is var renameIndex and >= 0 && renameIndex + 2 < arguments.Count
     && double.TryParse(arguments[renameIndex + 1], System.Globalization.CultureInfo.InvariantCulture, out var renameSeconds))
 {
@@ -245,6 +272,25 @@ catch (OperationCanceledException)
 }
 Emit("EXIT");
 return 0;
+
+// Сохранённые общие настройки (--data DIR/shared-settings.json); нет или испорчены — по умолчанию.
+SharedSettings? LoadSettings()
+{
+    try
+    {
+        if (!File.Exists(settingsFile))
+            return null;
+        using var document = JsonDocument.Parse(File.ReadAllText(settingsFile));
+        var root = document.RootElement;
+        return new SharedSettings(root.GetProperty("autoDownloadMB").GetInt32(), root.GetProperty("autoDownloadChanged").GetInt64(),
+            root.GetProperty("autoDownloadBy").GetString() ?? "");
+    }
+    catch (Exception e) when (e is IOException or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+    {
+        Log.Write($"Общие настройки не прочитаны, беру по умолчанию: {e.Message}");
+        return null;
+    }
+}
 
 // Скачать описание целиком в DIR/<id>/: DownloadFilesAsync или (--save-mode stream) через OpenFileStream.
 async Task SaveFilesAsync(FileOfferReceived received, string saveDirectory)

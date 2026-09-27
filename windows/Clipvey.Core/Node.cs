@@ -34,9 +34,11 @@ public sealed record PeerUpdate(string DeviceId, string OldName, string Name, De
 /// - находит связанные устройства и держит с каждым не больше одного сеанса;
 /// - пересылает фрагменты буфера (текст и картинки);
 /// - передаёт файлы по запросу (NodeFiles.cs);
-/// - ведёт связывание в обеих ролях.
+/// - ведёт связывание в обеих ролях;
+/// - держит общие настройки (docs/protocol.md, «Общие настройки») в согласии со всеми устройствами.
 /// Правила — docs/protocol.md. События вызываются из фоновых потоков.
-/// Узел платформенно-нейтральный: имя, тип устройства, «Передавать картинки» и «Передавать файлы» задаёт и хранит приложение.
+/// Узел платформенно-нейтральный: имя, тип устройства, «Передавать картинки», «Передавать файлы» и общие настройки
+/// задаёт и хранит приложение.
 public sealed partial class ClipveyNode : IAsyncDisposable
 {
     /// Сколько картинок может ждать отправки в одном сеансе; при переполнении отбрасывается самая старая.
@@ -67,8 +69,13 @@ public sealed partial class ClipveyNode : IAsyncDisposable
     private MdnsAdvertiser? _advertiser;
     private string _name;
     private volatile bool _imagesEnabled;
+    /// Общие настройки. Меняются под _lock; принятие и событие SettingsChanged — ещё и под _settingsGate,
+    /// чтобы события из разных сеансов шли в том же порядке, что и изменения.
+    private SharedSettings _settings;
+    private readonly object _settingsGate = new();
 
-    /// deviceType — свои os и form; imagesEnabled и filesEnabled — «Передавать картинки» и «Передавать файлы» при запуске.
+    /// deviceType — свои os и form; imagesEnabled и filesEnabled — «Передавать картинки» и «Передавать файлы» при запуске;
+    /// settings — сохранённые общие настройки (null — по умолчанию: 50 МиБ, changed = 0, by = свой deviceId).
     public ClipveyNode(
         Identity identity,
         DeviceStore store,
@@ -76,7 +83,8 @@ public sealed partial class ClipveyNode : IAsyncDisposable
         int preferredPort = Protocol.DefaultPort,
         DeviceType? deviceType = null,
         bool imagesEnabled = true,
-        bool filesEnabled = true)
+        bool filesEnabled = true,
+        SharedSettings? settings = null)
     {
         _identity = identity;
         _store = store;
@@ -86,6 +94,7 @@ public sealed partial class ClipveyNode : IAsyncDisposable
         DeviceType = deviceType ?? DeviceType.Unknown;
         _imagesEnabled = imagesEnabled;
         _filesEnabled = filesEnabled;
+        _settings = settings?.Normalized(identity.DeviceId) ?? SharedSettings.Default(identity.DeviceId);
     }
 
     public string DeviceId => _identity.DeviceId;
@@ -127,6 +136,11 @@ public sealed partial class ClipveyNode : IAsyncDisposable
 
     /// Связывание не удалось; текст по коду подбирает интерфейс.
     public event Action<FailureReason>? PairingFailed;
+
+    /// Общие настройки изменились: здесь (SetAutoDownloadMB) или пришли более новые с другого устройства.
+    /// Приложение сохраняет их целиком (все три поля). Вызывается из потока сеанса или вызывающего SetAutoDownloadMB,
+    /// по порядку изменений.
+    public event Action<SharedSettings>? SettingsChanged;
 
     /// Имя без пробелов по краям и не длиннее 63 байт UTF-8 (предел метки DNS для имени экземпляра).
     public static string NormalizeName(string raw)
@@ -282,6 +296,88 @@ public sealed partial class ClipveyNode : IAsyncDisposable
         }
         SendInfoToAll();
         Changed?.Invoke();
+    }
+
+    // MARK: - Общие настройки
+
+    /// Текущие общие настройки (docs/protocol.md, «Общие настройки»).
+    public SharedSettings Settings
+    {
+        get
+        {
+            lock (_lock)
+                return _settings;
+        }
+    }
+
+    /// Пользователь изменил «Скачивать автоматически» (МиБ; незнакомое значение — ближайшее допустимое):
+    /// changed — сейчас, by — это устройство; разослать всем сеансам. То же значение — ничего не меняется.
+    /// changed не меньше прежнего + 1: изменение здесь новее принятого, даже если часы другого устройства спешат.
+    public void SetAutoDownloadMB(int mb)
+    {
+        var value = SharedSettings.Nearest(mb);
+        SharedSettings updated;
+        List<ActiveSession> targets;
+        lock (_settingsGate)
+        {
+            lock (_lock)
+            {
+                if (_settings.AutoDownloadMB == value)
+                    return;
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                updated = new SharedSettings(value, Math.Max(now, _settings.Changed + 1), DeviceId);
+                _settings = updated;
+                targets = [.. _sessions.Values];
+            }
+            Log.Write($"Скачивать автоматически: до {value} МиБ (изменено здесь)");
+            SettingsChanged?.Invoke(updated);
+        }
+        SendSettings(updated, targets);
+    }
+
+    /// settings пришли по сеансу: новее своих — принять, сообщить приложению и переслать всем остальным сеансам.
+    private void HandleSettings(JsonObject message, ActiveSession session)
+    {
+        var incoming = SharedSettings.Parse(message);
+        List<ActiveSession> targets;
+        lock (_settingsGate)
+        {
+            SharedSettings current;
+            lock (_lock)
+            {
+                current = _settings;
+                if (incoming.IsNewerThan(current))
+                    _settings = incoming;
+                targets = [.. _sessions.Values.Where(other => other.PeerId != session.PeerId)];
+            }
+            if (!incoming.IsNewerThan(current))
+            {
+                if (incoming != current)
+                    Log.Write($"Общие настройки от «{session.PeerName}» старше своих ({incoming} ≤ {current}) — пропущены");
+                return;
+            }
+            Log.Write($"Общие настройки от «{session.PeerName}»: скачивать автоматически до {incoming.AutoDownloadMB} МиБ ({incoming.Changed}, {incoming.By})");
+            SettingsChanged?.Invoke(incoming);
+        }
+        SendSettings(incoming, targets);
+    }
+
+    private void SendSettings(SharedSettings settings, IEnumerable<ActiveSession> targets)
+    {
+        foreach (var session in targets)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await session.Info.Channel.SendAsync(settings.ToMessage(), _stop.Token);
+                }
+                catch (Exception e)
+                {
+                    Log.Write($"Не удалось отправить общие настройки «{session.PeerName}»: {e.Message}");
+                }
+            });
+        }
     }
 
     private PeerInfo OwnInfo
@@ -905,6 +1001,7 @@ public sealed partial class ClipveyNode : IAsyncDisposable
         var peerId = info.Peer.DeviceId;
         var session = new ActiveSession(info, this);
         ActiveSession? replaced = null;
+        SharedSettings settings;
         lock (_lock)
         {
             if (_sessions.TryGetValue(peerId, out var existing))
@@ -922,6 +1019,8 @@ public sealed partial class ClipveyNode : IAsyncDisposable
             _sessions[peerId] = session;
             _disconnectedSince.Remove(peerId);
             _problems.Remove(peerId);
+            // Под тем же _lock, что и добавление сеанса: изменение после этого разошлёт уже SetAutoDownloadMB.
+            settings = _settings;
         }
         replaced?.Close();
         _store.UpdateInfo(peerId, info.Remote.Name, info.Remote.Type);
@@ -932,6 +1031,8 @@ public sealed partial class ClipveyNode : IAsyncDisposable
             Log.Write($"«{info.Peer.Name}» теперь называется «{info.PeerName}»");
         session.Files.Start(_stop.Token);
         _ = Task.Run(() => RunSessionAsync(session));
+        // Свои общие настройки — сразу после ready (старые версии settings пропускают).
+        SendSettings(settings, [session]);
         Changed?.Invoke();
         PeerUpdated?.Invoke(Update(session, info.Peer.Name));
         return true;
@@ -1011,6 +1112,9 @@ public sealed partial class ClipveyNode : IAsyncDisposable
                         break;
                     case "info":
                         HandleInfo(message, session);
+                        break;
+                    case "settings":
+                        HandleSettings(message, session);
                         break;
                     case "blob_start":
                         HandleBlobStart(message, session);
