@@ -15,9 +15,13 @@ head -c $(( 60 * 1048576 )) /dev/urandom > "$WORK/большой.bin"
 mkdir -p "$WORK/readonly"
 chmod 555 "$WORK/readonly"
 VOLUME="$WORK/volume"
+VOLUME_ATTACHED=0
+# Отключается по флагу, а не по выводу mount: там путь с настоящим регистром букв (…/Clipvey), а $WORK может
+# быть …/clipvey — и образ оставался подключённым.
 detach_volume() {
-    if [ -d "$VOLUME" ] && mount | grep -q " on $VOLUME "; then
+    if [ "$VOLUME_ATTACHED" -eq 1 ]; then
         hdiutil detach "$VOLUME" -quiet -force 2>/dev/null || true
+        VOLUME_ATTACHED=0
     fi
 }
 trap 'status=$?; detach_volume; chmod 755 "$WORK/readonly" 2>/dev/null; (exit $status); cleanup' EXIT
@@ -56,6 +60,7 @@ expect "$WORK/mac.out" "^TOAST failed NoAccess$" 5 "окошко: нет дос�
 hdiutil create -size 20m -fs HFS+ -volname "e2e-$SUFFIX" -layout NONE "$WORK/small.dmg" -quiet || fail "hdiutil create"
 mkdir -p "$VOLUME"
 hdiutil attach "$WORK/small.dmg" -nobrowse -mountpoint "$VOLUME" -quiet || fail "hdiutil attach"
+VOLUME_ATTACHED=1
 stop "$MAC_PID"
 start_mac mac "$MAC_NAME" "$BOARD" --downloads "$VOLUME/Clipvey" --auto-download --toast-shots "$WORK/shots"
 MAC_PID=$LAST_PID
