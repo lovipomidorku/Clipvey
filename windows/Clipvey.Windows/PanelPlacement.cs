@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using Clipvey.Core;
 
@@ -146,16 +148,28 @@ internal static class PanelPlacement
 /// Оформление окна средствами DWM (Windows 11). На Windows 10 вызовы не срабатывают — это не ошибка.
 internal static class Dwm
 {
+    private const int DwmwaUseImmersiveDarkMode = 20;
     private const int DwmwaWindowCornerPreference = 33;
+    private const int DwmwaSystemBackdropType = 38;
     private const int DwmwcpRound = 2;
 
+    /// DWMSBT_TRANSIENTWINDOW: Acrylic, как у всплывающих панелей Windows 11.
+    private const int DwmsbtTransientWindow = 3;
+
     /// Скруглить углы окна. false — система не поддерживает (Windows 10).
-    public static bool TryRoundCorners(IntPtr window)
+    public static bool TryRoundCorners(IntPtr window) => TrySet(window, DwmwaWindowCornerPreference, DwmwcpRound);
+
+    /// Тёмная или светлая рамка и подложка окна.
+    public static bool TrySetDark(IntPtr window, bool dark) => TrySet(window, DwmwaUseImmersiveDarkMode, dark ? 1 : 0);
+
+    /// Подложка Acrylic (Windows 11 22H2 и новее). false — не поддерживается, фон нужен свой.
+    public static bool TrySetAcrylic(IntPtr window) => TrySet(window, DwmwaSystemBackdropType, DwmsbtTransientWindow);
+
+    private static bool TrySet(IntPtr window, int attribute, int value)
     {
         try
         {
-            var preference = DwmwcpRound;
-            return DwmSetWindowAttribute(window, DwmwaWindowCornerPreference, ref preference, sizeof(int)) == 0;
+            return DwmSetWindowAttribute(window, attribute, ref value, sizeof(int)) == 0;
         }
         catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
         {

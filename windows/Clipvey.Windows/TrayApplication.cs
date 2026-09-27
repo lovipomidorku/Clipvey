@@ -1,52 +1,89 @@
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using Clipvey.Core;
 using static Clipvey.Windows.Localization;
+using Forms = System.Windows.Forms;
 
 namespace Clipvey.Windows;
 
+/// Что передано: текст или картинка.
+internal enum SyncKind
+{
+    Text,
+    Image,
+}
+
+/// Последняя синхронизация: когда, откуда (From — имя устройства; null — отправлено отсюда) и что.
+/// Только в памяти, без содержимого.
+internal sealed record LastSync(DateTime Time, string? From, SyncKind Kind);
+
 /// Приложение без главного окна: значок в трее, узел Clipvey и слежение за буфером.
-internal sealed class TrayApplication : ApplicationContext
+/// Значок — NotifyIcon из WinForms, меню значка и панель — WPF.
+internal sealed class TrayApplication
 {
     /// Предел длины подсказки у значка в трее (NotifyIcon.Text бросает исключение на длинной строке).
     private const int MaxTrayText = 63;
 
     private readonly ClipveyNode _node;
     private readonly ClipboardWatcher _watcher;
-    private readonly NotifyIcon _tray;
+    private readonly Forms.NotifyIcon _tray;
     private readonly TrayIcons _icons = new();
     private TrayState? _trayState;
     private readonly SynchronizationContext _ui;
-    private ToolStripMenuItem? _statusItem;
-    private TrayPanel? _form;
-    private LastSync? _lastSync;
+    private PanelWindow? _panel;
     private readonly Updater _updater;
+
+    /// Меню значка. Строится при каждом открытии — так в нём всегда текущие язык, автозапуск и состояние.
+    private ContextMenu? _menu;
+
+    /// Невидимое окно, которое становится активным на время меню значка: без активного окна
+    /// меню не закрывается по клику мимо.
+    private HwndSource? _menuOwner;
+
+    /// Последняя синхронизация (null — ещё не было).
+    public LastSync? LastSync { get; private set; }
+
+    /// Когда закроется режим связывания, открытый отсюда (для обратного отсчёта). Узел срок наружу не отдаёт.
+    public DateTime? PairingDeadline { get; private set; }
+
+    public ClipveyNode Node => _node;
+    public Updater Updater => _updater;
 
     public TrayApplication()
     {
-        _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _ui = SynchronizationContext.Current ?? throw new InvalidOperationException("Нет контекста потока интерфейса");
         var identity = Identity.LoadOrCreate(new DpapiSecretStore(AppPaths.DataDirectory));
         // Тип устройства: ноутбук, если есть батарея.
-        var form = SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
+        var form = Forms.SystemInformation.PowerStatus.BatteryChargeStatus.HasFlag(Forms.BatteryChargeStatus.NoSystemBattery) ? "desktop" : "laptop";
         _node = new ClipveyNode(identity, new DeviceStore(AppPaths.DataDirectory), AppSettings.DeviceName ?? Environment.MachineName,
             deviceType: new DeviceType("windows", form), imagesEnabled: AppSettings.ImagesEnabled);
         _watcher = new ClipboardWatcher(OnLocalCopy, OnLocalImage,
             shouldRead: () => _node.Devices.Any(device => device.Connected),
             shouldReadImages: () => _node.ImagesEnabled && _node.Devices.Any(device => device.Connected && device.Enabled && device.AcceptsImages));
 
-        _tray = new NotifyIcon
+        _tray = new Forms.NotifyIcon
         {
             Icon = _icons.Get(TrayState.Idle),
             Text = "Clipvey",
             Visible = true,
         };
-        BuildMenu();
         _tray.MouseClick += (_, e) =>
         {
-            if (e.Button == MouseButtons.Left)
+            if (e.Button == Forms.MouseButtons.Left)
                 TogglePanel();
+        };
+        // Меню — по отпусканию правой кнопки, как у значков Windows.
+        _tray.MouseUp += (_, e) =>
+        {
+            if (e.Button == Forms.MouseButtons.Right)
+                OnUi(ShowMenu);
         };
         Localization.Changed += OnLanguageChanged;
         Theme.Start(_ui);
-        Theme.Changed += OnThemeChanged;
 
         _node.ClipReceived += (text, from) => OnUi(() =>
         {
@@ -62,17 +99,17 @@ internal sealed class TrayApplication : ApplicationContext
         _node.IncomingPairingChanged += incoming => OnUi(() =>
         {
             if (incoming is not null)
-                ShowForm();
+                ShowPanel();
             Refresh();
         });
         _node.PairingSucceeded += name => OnUi(() =>
         {
-            _form?.ShowResult(L($"Связано с «{name}»", $"Paired with “{name}”"));
+            _panel?.ShowResult(L($"Связано с «{name}»", $"Paired with “{name}”"));
             Refresh();
         });
         _node.PairingFailed += reason => OnUi(() =>
         {
-            _form?.ShowResult(TrayPanel.FailureText(reason));
+            _panel?.ShowResult(UiText.Failure(reason));
             Refresh();
         });
 
@@ -80,14 +117,10 @@ internal sealed class TrayApplication : ApplicationContext
         Refresh();
 
         _updater = new Updater(() => OnUi(Quit));
-        _updater.Changed += () => OnUi(() =>
-        {
-            if (_form is { Visible: true })
-                _form.RefreshContent();
-        });
+        _updater.Changed += () => OnUi(() => _panel?.RefreshContent());
         _updater.UpdateFound += version => OnUi(() => _tray.ShowBalloonTip(15000, "Clipvey",
-            L($"Доступна версия {version} — обновить?", $"Version {version} is available. Update?"), ToolTipIcon.Info));
-        _tray.BalloonTipClicked += (_, _) => OnUi(ShowForm);
+            L($"Доступна версия {version} — обновить?", $"Version {version} is available. Update?"), Forms.ToolTipIcon.Info));
+        _tray.BalloonTipClicked += (_, _) => OnUi(ShowPanel);
         _updater.Start();
         ListenForShowPanel();
     }
@@ -107,49 +140,11 @@ internal sealed class TrayApplication : ApplicationContext
         _node.SetImagesEnabled(enabled);
     }
 
-    /// Меню по правой кнопке. Пересобирается целиком при смене языка.
-    private void BuildMenu()
+    /// Открыть режим связывания (из панели и из меню значка) и запомнить срок для обратного отсчёта.
+    public void StartPairingMode()
     {
-        var old = _tray.ContextMenuStrip;
-        _statusItem = new ToolStripMenuItem { Enabled = false };
-        var autostart = new ToolStripMenuItem(L("Запускать при входе в Windows", "Start with Windows"))
-        {
-            Checked = Autostart.IsEnabled,
-            CheckOnClick = true,
-        };
-        autostart.CheckedChanged += (_, _) => Autostart.Set(autostart.Checked);
-
-        var language = new ToolStripMenuItem(L("Язык", "Language"));
-        foreach (var (value, title) in LanguageChoices())
-        {
-            var item = new ToolStripMenuItem(title) { Checked = Setting == value };
-            // Смена языка пересобирает это меню — откладываем её, пока меню обрабатывает клик.
-            item.Click += (_, _) => OnUi(() => Localization.Set(value));
-            language.DropDownItems.Add(item);
-        }
-
-        var menu = new ContextMenuStrip { Renderer = new ThemedMenuRenderer(Theme.Current) };
-        menu.Items.Add(_statusItem);
-        menu.Items.Add(new ToolStripSeparator());
-        // Панель открываем после закрытия меню: иначе меню, закрываясь, вернёт фокус значку и панель сразу спрячется.
-        menu.Items.Add(L("Открыть Clipvey", "Open Clipvey"), null, (_, _) => OnUi(ShowForm));
-        menu.Items.Add(L("Связать новое устройство", "Pair a new device"), null, (_, _) => OnUi(() =>
-        {
-            _node.StartPairingMode();
-            ShowForm();
-        }));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(autostart);
-        menu.Items.Add(language);
-        menu.Items.Add(L("Открыть журнал", "Open log"), null, (_, _) => FileLog.Open());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(L("Выход", "Quit"), null, (_, _) => Quit());
-        // Автозапуск могли поменять в панели — отметка в меню обновляется при каждом открытии.
-        menu.Opening += (_, _) => autostart.Checked = Autostart.IsEnabled;
-
-        _tray.ContextMenuStrip = menu;
-        if (old is not null)
-            OnUi(old.Dispose);
+        PairingDeadline = DateTime.UtcNow + Protocol.PairingTimeout;
+        _node.StartPairingMode();
     }
 
     /// Варианты настройки «Язык». Названия языков пишутся на самих языках.
@@ -160,17 +155,86 @@ internal sealed class TrayApplication : ApplicationContext
         (AppLanguage.English, "English"),
     ];
 
-    private void OnLanguageChanged()
+    // MARK: - Меню значка
+
+    private void ShowMenu()
     {
-        BuildMenu();
-        Refresh();
+        if (_menu is { IsOpen: true })
+            return;
+        var devices = _node.Devices;
+        var connected = devices.Count(device => device.Connected);
+        var status = devices.Count == 0
+            ? L("Нет связанных устройств", "No paired devices")
+            : L($"Подключено {connected} из {devices.Count}", $"{connected} of {devices.Count} connected");
+
+        var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
+        menu.Items.Add(new MenuItem { Header = $"Clipvey — {status}", IsEnabled = false });
+        menu.Items.Add(new Separator());
+        // Панель открываем после закрытия меню: иначе меню, закрываясь, заберёт активность, и панель спрячется.
+        menu.Items.Add(Item(L("Открыть Clipvey", "Open Clipvey"), () => AfterMenu(ShowPanel)));
+        menu.Items.Add(Item(L("Связать новое устройство", "Pair a new device"), () => AfterMenu(() =>
+        {
+            StartPairingMode();
+            ShowPanel();
+        })));
+        menu.Items.Add(new Separator());
+
+        var autostart = new MenuItem
+        {
+            Header = L("Запускать при входе в Windows", "Start with Windows"),
+            IsCheckable = true,
+            IsChecked = Autostart.SafeIsEnabled(),
+        };
+        autostart.Click += (_, _) => Autostart.SafeSet(autostart.IsChecked);
+        menu.Items.Add(autostart);
+
+        var language = new MenuItem { Header = L("Язык", "Language") };
+        foreach (var (value, title) in LanguageChoices())
+        {
+            var choice = value;
+            // Смену языка откладываем до закрытия меню: она перестраивает панель.
+            language.Items.Add(Item(title, () => AfterMenu(() => Localization.Set(choice)), isChecked: Setting == value));
+        }
+        menu.Items.Add(language);
+        menu.Items.Add(Item(L("Открыть журнал", "Open log"), FileLog.Open));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item(L("Выход", "Quit"), () => AfterMenu(Quit)));
+
+        menu.Opened += (_, _) =>
+        {
+            // Меню должно быть в активном окне, иначе клик мимо его не закроет.
+            _menuOwner ??= new HwndSource(new HwndSourceParameters("Clipvey.Menu")
+            {
+                Width = 0,
+                Height = 0,
+                WindowStyle = unchecked((int)0x80000000), // WS_POPUP, невидимое
+                ExtendedWindowStyle = 0x00000080, // WS_EX_TOOLWINDOW: не в Alt+Tab
+            });
+            SetForegroundWindow(_menuOwner.Handle);
+            menu.Focus();
+        };
+        menu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_menu, menu))
+                _menu = null;
+        };
+        _menu = menu;
+        menu.IsOpen = true;
     }
 
-    private void OnThemeChanged()
+    private static MenuItem Item(string header, Action onClick, bool isChecked = false)
     {
-        BuildMenu();
-        _form?.RefreshContent();
+        var item = new MenuItem { Header = header, IsChecked = isChecked };
+        item.Click += (_, _) => onClick();
+        return item;
     }
+
+    private static void AfterMenu(Action action) =>
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, action);
+
+    // MARK: - Состояние
+
+    private void OnLanguageChanged() => Refresh();
 
     private void OnLocalCopy(string text)
     {
@@ -191,9 +255,8 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void NoteSync(LastSync sync)
     {
-        _lastSync = sync;
-        if (_form is { Visible: true })
-            _form.RefreshContent();
+        LastSync = sync;
+        _panel?.RefreshContent();
     }
 
     private void OnUi(Action action) => _ui.Post(_ => action(), null);
@@ -205,8 +268,6 @@ internal sealed class TrayApplication : ApplicationContext
         var status = devices.Count == 0
             ? L("Нет связанных устройств", "No paired devices")
             : L($"Подключено {connected} из {devices.Count}", $"{connected} of {devices.Count} connected");
-        if (_statusItem is not null)
-            _statusItem.Text = $"Clipvey — {status}";
         if (devices.Count > 0 && devices.All(device => !device.Enabled))
             status = L("Синхронизация выключена", "Sync is off");
         UpdateTrayIcon(connected > 0 ? TrayState.Connected
@@ -214,9 +275,7 @@ internal sealed class TrayApplication : ApplicationContext
             : TrayState.Idle);
         var tip = $"Clipvey: {status}";
         _tray.Text = tip.Length <= MaxTrayText ? tip : tip[..(MaxTrayText - 1)] + "…";
-        // Скрытая панель перестроится при показе.
-        if (_form is { Visible: true })
-            _form.RefreshContent();
+        _panel?.RefreshContent();
     }
 
     private void UpdateTrayIcon(TrayState state)
@@ -230,6 +289,8 @@ internal sealed class TrayApplication : ApplicationContext
         _tray.Icon = icon;
         _icons.ReleaseStale();
     }
+
+    // MARK: - Повторный запуск
 
     /// Имя события «открой панель»: его взводит повторный запуск Clipvey.exe.
     private const string ShowPanelEventName = @"Local\Clipvey.ShowPanel";
@@ -259,7 +320,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             _showPanelEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowPanelEventName);
             _showPanelWait = ThreadPool.RegisterWaitForSingleObject(_showPanelEvent,
-                (_, _) => _ui.Post(_ => ShowForm(), null), null, Timeout.Infinite, executeOnlyOnce: false);
+                (_, _) => OnUi(ShowPanel), null, Timeout.Infinite, executeOnlyOnce: false);
         }
         catch (Exception e)
         {
@@ -267,14 +328,18 @@ internal sealed class TrayApplication : ApplicationContext
         }
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [DllImport("user32.dll")]
     private static extern bool AllowSetForegroundWindow(int processId);
 
-    private void ShowForm()
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    // MARK: - Панель
+
+    private void ShowPanel()
     {
-        if (_form is null || _form.IsDisposed)
-            _form = new TrayPanel(_node, () => _lastSync, _updater, Rename, SetImagesEnabled);
-        _form.ShowPanel();
+        _panel ??= new PanelWindow(this);
+        _panel.ShowPanel();
     }
 
     /// Левый клик по значку: открыть панель или закрыть открытую.
@@ -282,17 +347,17 @@ internal sealed class TrayApplication : ApplicationContext
     /// поэтому клик сразу после такого скрытия считается закрытием, а не новым открытием.
     private void TogglePanel()
     {
-        if (_form is { IsDisposed: false } form)
+        if (_panel is { } panel)
         {
-            if (form.Visible)
+            if (panel.IsVisible)
             {
-                form.Hide();
+                panel.HidePanel();
                 return;
             }
-            if (Environment.TickCount64 - form.HiddenAt < 500)
+            if (Environment.TickCount64 - panel.HiddenAt < 500)
                 return;
         }
-        ShowForm();
+        ShowPanel();
     }
 
     private void Quit()
@@ -300,14 +365,14 @@ internal sealed class TrayApplication : ApplicationContext
         _showPanelWait?.Unregister(null);
         _showPanelEvent?.Dispose();
         Localization.Changed -= OnLanguageChanged;
-        Theme.Changed -= OnThemeChanged;
         Theme.Stop();
         _tray.Visible = false;
         _tray.Dispose();
         _icons.Dispose();
         _watcher.Dispose();
         _updater.Dispose();
-        _form?.Dispose();
+        _panel?.ClosePanel();
+        _menuOwner?.Dispose();
         try
         {
             _node.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
@@ -317,6 +382,6 @@ internal sealed class TrayApplication : ApplicationContext
             Log.Write($"Остановка: {e.Message}");
         }
         Log.Write("Clipvey завершён");
-        ExitThread();
+        Application.Current.Shutdown();
     }
 }

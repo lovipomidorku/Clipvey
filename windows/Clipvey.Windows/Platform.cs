@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Drawing;
+using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.Win32;
 using Clipvey.Core;
@@ -62,8 +64,12 @@ internal static class FileLog
                 }
             }
         };
-        Log.Write($"Clipvey {Application.ProductVersion} запущен, Windows {Environment.OSVersion.Version}");
+        Log.Write($"Clipvey {Version} запущен, Windows {Environment.OSVersion.Version}");
     }
+
+    /// Версия программы (InformationalVersion, из файла VERSION).
+    private static string Version =>
+        Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "?";
 
     public static void Open()
     {
@@ -96,6 +102,34 @@ internal static class Autostart
             key.DeleteValue(ValueName, throwOnMissingValue: false);
         Log.Write($"Автозапуск {(enabled ? "включён" : "выключен")}");
     }
+
+    /// IsEnabled без исключений: реестр может быть недоступен (политики) — тогда «выключен».
+    public static bool SafeIsEnabled()
+    {
+        try
+        {
+            return IsEnabled;
+        }
+        catch (Exception e)
+        {
+            Log.Write($"Не удалось прочитать автозапуск: {e.Message}");
+            return false;
+        }
+    }
+
+    /// Set без исключений. Возвращает, включён ли автозапуск после попытки.
+    public static bool SafeSet(bool enabled)
+    {
+        try
+        {
+            Set(enabled);
+        }
+        catch (Exception e)
+        {
+            Log.Write($"Не удалось изменить автозапуск: {e.Message}");
+        }
+        return SafeIsEnabled();
+    }
 }
 
 internal static class AppIcon
@@ -108,6 +142,17 @@ internal static class AppIcon
 
     /// Картинка значка не меньше side пикселей (если есть). Внутри Clipvey.ico — PNG 16…256 px:
     /// берём PNG напрямую, чтобы не зависеть от того, как Icon.ToBitmap обходится с PNG-кадрами.
+    /// PNG-кадр значка не меньше side пикселей (null — в Clipvey.ico нет PNG-кадров).
+    public static byte[]? Png(int side)
+    {
+        using var stream = typeof(AppIcon).Assembly.GetManifestResourceStream("Clipvey.ico");
+        if (stream is null)
+            return null;
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return BestPng(memory.ToArray(), side);
+    }
+
     public static Bitmap LoadBitmap(int side)
     {
         try

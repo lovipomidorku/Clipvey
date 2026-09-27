@@ -1,0 +1,136 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Оформление панели поверх темы Windows 11 (ThemeMode). Цвета — только ресурсы темы (DynamicResource),
+         поэтому светлая и тёмная тема переключаются без нашего участия. -->
+
+    <FontFamily x:Key="TextFont">Segoe UI Variable Text, Segoe UI</FontFamily>
+    <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="CodeFont">Cascadia Mono, Consolas</FontFamily>
+
+    <!-- Карточка: как у параметров Windows 11 — полупрозрачная заливка, тонкая рамка, радиус 8. -->
+    <Style x:Key="Card" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="14,12" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+
+    <Style x:Key="Body" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <Style x:Key="BodyStrong" TargetType="TextBlock" BasedOn="{StaticResource Body}">
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="Caption" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- Заголовок раздела над карточками. -->
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="Margin" Value="2,8,0,8" />
+    </Style>
+
+    <Style x:Key="Glyph" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
+
+    <!-- Переключатель Windows 11 (ToggleSwitch) для ToggleButton: дорожка 40×20, бегунок 12, при наведении 14. -->
+    <Style x:Key="Switch" TargetType="ToggleButton">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Track" CornerRadius="10" BorderThickness="1"
+                                Background="{DynamicResource ToggleSwitchFillOff}"
+                                BorderBrush="{DynamicResource ToggleSwitchStrokeOff}" />
+                        <Ellipse x:Name="Knob" Width="12" Height="12" Margin="4,0" HorizontalAlignment="Left"
+                                 Fill="{DynamicResource ToggleSwitchKnobFillOff}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource ToggleSwitchFillOffPointerOver}" />
+                            <Setter TargetName="Knob" Property="Width" Value="14" />
+                            <Setter TargetName="Knob" Property="Height" Value="14" />
+                            <Setter TargetName="Knob" Property="Margin" Value="3,0" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Knob" Property="Width" Value="17" />
+                            <Setter TargetName="Knob" Property="Height" Value="14" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource ToggleSwitchFillOn}" />
+                            <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource ToggleSwitchStrokeOn}" />
+                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                            <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource ToggleSwitchKnobFillOn}" />
+                        </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsChecked" Value="True" />
+                                <Condition Property="IsMouseOver" Value="True" />
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource ToggleSwitchFillOnPointerOver}" />
+                        </MultiTrigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Track" Property="Opacity" Value="0.4" />
+                            <Setter TargetName="Knob" Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Кнопка без фона («⋯»): подложка только при наведении и нажатии. -->
+    <Style x:Key="SubtleButton" TargetType="Button">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Back" Background="Transparent" CornerRadius="4">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Back" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Точка состояния устройства. -->
+    <Style x:Key="StatusDot" TargetType="Ellipse">
+        <Setter Property="Width" Value="10" />
+        <Setter Property="Height" Value="10" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+        <Setter Property="StrokeThickness" Value="2" />
+        <Setter Property="Stroke" Value="{DynamicResource SolidBackgroundFillColorSecondaryBrush}" />
+    </Style>
+</ResourceDictionary>
