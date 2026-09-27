@@ -27,8 +27,8 @@ internal static class UiText
     /// Почему файлы не отправлены — коротко, для окошка.
     public static string OfferFailure(FileOfferFailure failure) => failure switch
     {
-        FileOfferFailure.Empty => L("Нечего отправлять: ярлыки-ссылки и особые файлы не передаются",
-            "Nothing to send: symbolic links and special files aren’t shared"),
+        FileOfferFailure.Empty => L("Нечего отправлять: символические ссылки, точки соединения и особые файлы не передаются",
+            "Nothing to send: symbolic links, junctions and special files aren’t shared"),
         FileOfferFailure.TooManyItems => L("Больше 10 000 файлов и папок", "More than 10,000 files and folders"),
         FileOfferFailure.TooLarge => L("Всего больше 10 ГБ", "More than 10 GB in total"),
         FileOfferFailure.NameTooLong => L("Слишком длинное имя или путь", "A name or path is too long"),
