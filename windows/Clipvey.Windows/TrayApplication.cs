@@ -195,6 +195,9 @@ internal sealed class TrayApplication
             // Смену языка откладываем до закрытия меню: она перестраивает панель.
             language.Items.Add(Item(title, () => AfterMenu(() => Localization.Set(choice)), isChecked: Setting == value));
         }
+        // У пункта с подменю в теме Windows 11 нет колонки для галочки — сдвигаем текст вровень с остальными пунктами.
+        language.Loaded += (_, _) => language.Padding = new Thickness(language.Padding.Left + CheckColumnWidth,
+            language.Padding.Top, language.Padding.Right, language.Padding.Bottom);
         menu.Items.Add(language);
         menu.Items.Add(Item(L("Открыть журнал", "Open log"), FileLog.Open));
         menu.Items.Add(new Separator());
@@ -221,6 +224,9 @@ internal sealed class TrayApplication
         _menu = menu;
         menu.IsOpen = true;
     }
+
+    /// Ширина колонки галочки в меню темы Windows 11 (DIP).
+    private const double CheckColumnWidth = 26;
 
     private static MenuItem Item(string header, Action onClick, bool isChecked = false)
     {
