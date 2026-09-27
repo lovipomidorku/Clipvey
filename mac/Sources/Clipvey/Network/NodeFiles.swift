@@ -278,11 +278,13 @@ final class SessionFiles {
 
     func end(req: UInt32, size: Int64) async {
         guard let request = requests.removeValue(forKey: req) else { return }
+        request.expectsData = false
         await request.end(size: size)
     }
 
     func fail(req: UInt32, reason: String) {
         guard let request = requests.removeValue(forKey: req) else { return }
+        request.expectsData = false
         request.finish(.failure(FileTransferError(FileTransferFailure(peerReason: reason), "источник ответил \(reason)")))
         Task { await request.closeWriter() }
     }
@@ -299,6 +301,7 @@ final class SessionFiles {
         let pending = requests.values
         requests.removeAll()
         for request in pending {
+            request.expectsData = false
             request.finish(.failure(FileTransferError(.deviceUnavailable, "сеанс с устройством оборвался")))
             await request.closeWriter()
         }
@@ -311,6 +314,8 @@ final class SessionFiles {
 final class IncomingFileRequest {
     fileprivate(set) var req: UInt32 = 0
     fileprivate weak var files: SessionFiles?
+    /// Источник ещё может прислать данные по req (нет file_end, file_error, обрыва и отмены): при отмене — file_cancel.
+    fileprivate var expectsData = true
     private let size: Int64
     private let writer: FileWriter
     private let counter: ProgressCounter
@@ -356,11 +361,12 @@ final class IncomingFileRequest {
         }
     }
 
-    /// Отменить: источнику — file_cancel, файл закрывается (папку потом удаляет downloadFiles).
+    /// Отменить: источнику — file_cancel (если он ещё шлёт данные), файл закрывается (папку потом удаляет downloadFiles).
+    /// Результат мог уже установить обработчик отмены задачи в wait() — file_cancel нужен и тогда.
     func cancel(_ error: Error = CancellationError()) async {
-        let wasActive = result == nil
         finish(.failure(error))
-        if wasActive, let files, req != 0 {
+        if expectsData, let files, req != 0 {
+            expectsData = false
             files.unregister(req)
             files.sendInBackground(.fileCancel(req: req))
         }

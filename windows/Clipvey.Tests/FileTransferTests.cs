@@ -147,7 +147,21 @@ public class FileTransferTests(NodePairFixture fixture) : IClassFixture<NodePair
         Assert.True(stream.CanSeek);
         Assert.Equal(data[..100], ReadExactly(stream, 100));
         // Читатель отстал: источник успевает прислать больше 16 МиБ — запрос отменяется и потом возобновляется.
-        await Task.Delay(1500);
+        // Сеанс при этом не ждёт читателя: текст проходит.
+        var clip = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnClip(string text, string from) => clip.TrySetResult(text);
+        Pair.Receiver.ClipReceived += OnClip;
+        try
+        {
+            await Task.Delay(500);
+            await Pair.Source.BroadcastClipAsync("пока поток ждёт");
+            Assert.Equal("пока поток ждёт", await clip.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            Pair.Receiver.ClipReceived -= OnClip;
+        }
+        await Task.Delay(1000);
         var rest = new MemoryStream();
         stream.CopyTo(rest, 64 * 1024);
         Assert.True(rest.ToArray().AsSpan().SequenceEqual(data.AsSpan(100)));

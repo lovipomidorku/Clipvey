@@ -40,6 +40,8 @@ A_PID=$LAST_PID
 expect "$WORK/a.out" "^FILES_SENT 1 " 30 "A отправил большой файл"
 ID="$(offer_id "$WORK/a.out")"
 expect "$WORK/b.out" "^FILES_FAILED $ID Cancelled$" 30 "B отменил скачивание"
+# 100 МиБ идут дольше, чем file_cancel: источник обрывает отправку, не досылая файл.
+expect "$WORK/a.err" "Запрос [0-9]+ от «${B_NAME}» отменён после [0-9]+ байт" 10 "A получил file_cancel и прекратил отправку"
 sleep 1
 [ -z "$(ls -A "$WORK/cancelled/$ID")" ] || fail "после отмены остались файлы: $(ls -A "$WORK/cancelled/$ID")"
 say "ок: после отмены ничего не осталось"

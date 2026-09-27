@@ -40,6 +40,8 @@ PEER_PID=$LAST_PID
 expect "$WORK/peer.out" "^FILES_SENT 1 " 30 "двойник отправил большой файл"
 ID="$(offer_id "$WORK/peer.out")"
 expect "$WORK/mac.out" "^FILES_FAILED $ID Cancelled$" 30 "Mac отменил скачивание"
+# 100 МиБ идут дольше, чем file_cancel: источник обрывает отправку, не досылая файл.
+expect "$WORK/peer.err" "Запрос [0-9]+ от «${MAC_NAME}» отменён после [0-9]+ байт" 10 "двойник получил file_cancel и прекратил отправку"
 sleep 1
 [ -z "$(ls -A "$WORK/cancelled/$ID")" ] || fail "после отмены остались файлы: $(ls -A "$WORK/cancelled/$ID")"
 say "ок: после отмены ничего не осталось"

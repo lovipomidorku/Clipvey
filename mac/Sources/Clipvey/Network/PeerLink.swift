@@ -98,28 +98,37 @@ actor PeerLink {
 
     // MARK: - Кадры
 
-    /// Заголовок и нагрузка ставятся в очередь NWConnection подряд, без точки приостановки между ними,
-    /// отдельными отправками — чтобы не склеивать их копированием (кусок файла — до 1 МиБ).
+    /// Нагрузка больше этого (куски файлов) уходит отдельной отправкой после заголовка, чтобы не копировать её
+    /// ради склейки; меньшая — одним куском вместе с заголовком, как раньше (без задержек Нейгла на коротких сообщениях).
+    private static let separateSendThreshold = 64 * 1024
+
+    /// Заголовок и нагрузка ставятся в очередь NWConnection без точки приостановки между ними.
     private func sendFrame(_ payload: Data) async throws {
         guard !payload.isEmpty, payload.count <= Self.maxFrameBytes else {
             throw ClipveyError.protocolViolation("Недопустимая длина кадра: \(payload.count)")
         }
-        var header = Data(count: 4)
         let length = UInt32(payload.count)
-        header[0] = UInt8(truncatingIfNeeded: length >> 24)
-        header[1] = UInt8(truncatingIfNeeded: length >> 16)
-        header[2] = UInt8(truncatingIfNeeded: length >> 8)
-        header[3] = UInt8(truncatingIfNeeded: length)
+        var header = Data([UInt8(truncatingIfNeeded: length >> 24), UInt8(truncatingIfNeeded: length >> 16),
+                           UInt8(truncatingIfNeeded: length >> 8), UInt8(truncatingIfNeeded: length)])
+        let separate = payload.count > Self.separateSendThreshold
+        if !separate {
+            header.append(payload)
+        }
         let connection = self.connection
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection.send(content: header, completion: .contentProcessed { _ in })
-            connection.send(content: payload, completion: .contentProcessed { error in
+            let completion = NWConnection.SendCompletion.contentProcessed { error in
                 if let error {
                     continuation.resume(throwing: ClipveyError.connectionFailed(error.localizedDescription))
                 } else {
                     continuation.resume()
                 }
-            })
+            }
+            if separate {
+                connection.send(content: header, completion: .contentProcessed { _ in })
+                connection.send(content: payload, completion: completion)
+            } else {
+                connection.send(content: header, completion: completion)
+            }
         }
     }
 
