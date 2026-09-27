@@ -87,19 +87,31 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <array>
         <string>_clipvey._tcp</string>
     </array>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Clipvey reads the files you copy to send them to your other computers.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Clipvey reads the files you copy to send them to your other computers.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Clipvey reads the files you copy and saves large files from your other computers to Downloads.</string>
     $ICON_PLIST_ENTRY
 </dict>
 </plist>
 PLIST
 
-# Переводы строк Info.plist (вопрос о доступе к локальной сети). Интерфейс переводится
+# Переводы строк Info.plist (вопросы о доступе к локальной сети и к папкам с файлами). Интерфейс переводится
 # в коде (L("…", "…")), а эти файлы нужны, чтобы macOS показала вопрос на языке пользователя.
 mkdir -p "$APP/Contents/Resources/en.lproj" "$APP/Contents/Resources/ru.lproj"
 cat > "$APP/Contents/Resources/en.lproj/InfoPlist.strings" <<'STRINGS'
 "NSLocalNetworkUsageDescription" = "Clipvey finds your computers on the local network and syncs the clipboard with them.";
+"NSDesktopFolderUsageDescription" = "Clipvey reads the files you copy to send them to your other computers.";
+"NSDocumentsFolderUsageDescription" = "Clipvey reads the files you copy to send them to your other computers.";
+"NSDownloadsFolderUsageDescription" = "Clipvey reads the files you copy and saves large files from your other computers to Downloads.";
 STRINGS
 cat > "$APP/Contents/Resources/ru.lproj/InfoPlist.strings" <<'STRINGS'
 "NSLocalNetworkUsageDescription" = "Clipvey находит ваши компьютеры в локальной сети и синхронизирует с ними буфер обмена.";
+"NSDesktopFolderUsageDescription" = "Clipvey читает файлы, которые вы копируете, чтобы передать их на другие компьютеры.";
+"NSDocumentsFolderUsageDescription" = "Clipvey читает файлы, которые вы копируете, чтобы передать их на другие компьютеры.";
+"NSDownloadsFolderUsageDescription" = "Clipvey читает файлы, которые вы копируете, и сохраняет в «Загрузки» большие файлы с других компьютеров.";
 STRINGS
 
 codesign --force --sign - "$APP"
