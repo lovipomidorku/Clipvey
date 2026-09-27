@@ -108,6 +108,16 @@ enum TestHooks {
             }
             try? await Task.sleep(for: .seconds(1))
             report("открыто")
+            // Каждое изменение рамки окна — чтобы увидеть промежуточные рывки при смене страницы.
+            let start = Date()
+            for window in NSApp.windows where String(describing: type(of: window)).contains("MenuBarExtraWindow") {
+                for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification] {
+                    NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { note in
+                        guard let window = note.object as? NSWindow else { return }
+                        emit("FRAME +\(Int(Date().timeIntervalSince(start) * 1000))мс top=\(Int(window.frame.maxY)) height=\(Int(window.frame.height))")
+                    }
+                }
+            }
             for round in 1...2 {
                 model.page = .settings
                 try? await Task.sleep(for: .seconds(1))

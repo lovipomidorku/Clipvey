@@ -25,6 +25,11 @@ private struct WindowHeightFitter: NSViewRepresentable {
     /// Окно MenuBarExtra стоит на столько точек ниже строки меню.
     private static let gapBelowMenuBar: CGFloat = 2
 
+    /// Когда окно растёт, MenuBarExtra ставит высоту чуть больше содержимого (на ~12 точек).
+    /// Если спорить с ним, край окна дёргается. Поэтому ужимаем только заметно лишнее —
+    /// например, после возврата из настроек.
+    private static let tolerance: CGFloat = 24
+
     func makeNSView(context: Context) -> NSView {
         NSView()
     }
@@ -46,10 +51,11 @@ private struct WindowHeightFitter: NSViewRepresentable {
         let statusBar = NSApp.windows.first { String(describing: type(of: $0)).contains("StatusBarWindow") }
         let top = statusBar.map { $0.frame.minY - gapBelowMenuBar } ?? window.frame.maxY
         var frame = window.frame
-        guard abs(frame.height - height) > 0.5 || abs(frame.maxY - top) > 0.5 else { return }
-        frame.size.height = height
-        frame.origin.y = top - height
+        let newHeight = frame.height - height > tolerance || frame.height < height ? height : frame.height
+        guard abs(frame.height - newHeight) > 0.5 || abs(frame.maxY - top) > 0.5 else { return }
+        frame.size.height = newHeight
+        frame.origin.y = top - newHeight
         window.setFrame(frame, display: true)
-        Log.app.debug("Окно: высота \(height, format: .fixed(precision: 0)), верх \(top, format: .fixed(precision: 0))")
+        Log.app.debug("Окно: высота \(newHeight, format: .fixed(precision: 0)), верх \(top, format: .fixed(precision: 0))")
     }
 }
