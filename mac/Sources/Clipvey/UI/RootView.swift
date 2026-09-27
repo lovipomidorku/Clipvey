@@ -72,6 +72,14 @@ struct RootView: View {
 struct MainView: View {
     @Environment(AppModel.self) private var model
 
+    private var lastSyncSymbol: String {
+        switch model.lastSyncKind {
+        case .image: "photo"
+        case .files: "doc.on.doc"
+        default: "arrow.left.arrow.right"
+        }
+    }
+
     var body: some View {
         if let node = model.node {
             VStack(alignment: .leading, spacing: 12) {
@@ -90,7 +98,7 @@ struct MainView: View {
                     Label {
                         Text("\(L("Последняя синхронизация", "Last sync")): \(lastSync)")
                     } icon: {
-                        Image(systemName: model.lastSyncKind == .image ? "photo" : "arrow.left.arrow.right")
+                        Image(systemName: lastSyncSymbol)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -432,8 +440,9 @@ struct SettingsView: View {
             DeviceNameField()
                 .cardStyle()
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 SettingsToggle(title: L("Передавать картинки", "Sync images"), isOn: $model.imagesEnabled)
+                SettingsToggle(title: L("Передавать файлы", "Sync files"), isOn: $model.filesEnabled)
             }
             .cardStyle()
 

@@ -7,6 +7,8 @@ import Foundation
 enum FileOfferResult: Sendable {
     case offered(FileOffer, recipients: Int)
     case failed(FileOfferFailure)
+    /// Пока обходились папки, содержимое буфера сменилось (isCurrent вернул false): описание не отправлено.
+    case superseded
 }
 
 /// Своё описание: что отдавать по file_get.
@@ -44,8 +46,9 @@ extension ClipveyNode {
 
     /// Отправить описание выбранных файлов и папок напрямую подключённым включённым устройствам с file в caps
     /// (не по цепочке). Обход папок идёт в фоне. Содержимое потом отдаётся по запросам, пока описание последнее
-    /// (и ещё час после этого).
-    func offerFiles(_ urls: [URL]) async -> FileOfferResult {
+    /// (и ещё час после этого). isCurrent проверяется после обхода: если в буфере уже другое (скопировали новое,
+    /// пришло с другого устройства), устаревшее описание не отправляется и не заменяет более новое содержимое.
+    func offerFiles(_ urls: [URL], isCurrent: @MainActor () -> Bool = { true }) async -> FileOfferResult {
         guard filesEnabled else {
             Log.files.info("Передача файлов выключена — файлы не отправлены")
             return .failed(.disabled)
@@ -58,6 +61,10 @@ extension ClipveyNode {
         case .failure(let failure):
             Log.files.notice("Файлы не отправлены: \(failure.code, privacy: .public)")
             return .failed(failure)
+        }
+        guard isCurrent() else {
+            Log.files.info("Файлы не отправлены: пока обходились папки, буфер изменился")
+            return .superseded
         }
         let offer = FileOffer(id: Blob.newID(), items: tree.items, total: tree.total)
         registerOffer(OfferRecord(offer: offer, urls: tree.urls))
@@ -274,6 +281,10 @@ final class SessionFiles {
     /// цикл приёма сеанса ждёт её, так что из сети не читается быстрее, чем пишет диск.
     func chunk(req: UInt32, data: Data) async {
         await requests[req]?.chunk(data)
+        // Режим проверки (--slow-files): приём медленнее, чтобы увидеть прогресс и успеть отменить.
+        if let delay = TestHooks.fileChunkDelay {
+            try? await Task.sleep(for: delay)
+        }
     }
 
     func end(req: UInt32, size: Int64) async {

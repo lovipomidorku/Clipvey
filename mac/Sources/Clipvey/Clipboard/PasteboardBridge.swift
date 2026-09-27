@@ -6,11 +6,13 @@ import UniformTypeIdentifiers
 /// macOS не сообщает об изменениях буфера, поэтому changeCount проверяется дважды в секунду.
 /// Само содержимое читается, только когда есть подключённые устройства.
 ///
-/// Текст или картинка. Если в буфере и то и другое, отправляется одно:
+/// Файлы, картинка или текст — отправляется одно:
+/// - файлы и папки (public.file-url, как их кладёт Finder) — важнее всего: имя файла текстом и значок картинкой,
+///   которые Finder кладёт рядом, не отправляются. Если файлы принять некому (выключено «Передавать файлы» или
+///   у подключённых устройств нет file в caps), не отправляется ничего: имя файла другому устройству ни к чему;
 /// - картинка — если текста нет или это только ссылка (так копирует картинку браузер: данные картинки + URL);
 /// - текст — в остальных случаях: офисные программы кладут рядом с текстом его изображение
-///   (ячейки Excel, фрагмент Word), и пользователь копировал именно текст;
-/// - скопированный в Finder файл (public.file-url) картинкой не считается: его значок не отправляется, как и раньше.
+///   (ячейки Excel, фрагмент Word), и пользователь копировал именно текст.
 @MainActor
 final class PasteboardBridge {
     /// Отметка «пришло с другого устройства»: такое содержимое не отправляется обратно.
@@ -32,8 +34,14 @@ final class PasteboardBridge {
     var shouldRead: () -> Bool = { false }
     /// Отправлять ли картинки (включено «Передавать картинки» и есть кому).
     var shouldReadImages: () -> Bool = { false }
+    /// Отправлять ли файлы (включено «Передавать файлы» и есть кому).
+    var shouldReadFiles: () -> Bool = { false }
     var onCopy: (String) -> Void = { _ in }
     var onCopyImage: (_ data: Data, _ mime: String) -> Void = { _, _ in }
+    /// Скопированы файлы и папки (пути, а не ссылки на файлы Finder).
+    var onCopyFiles: ([URL]) -> Void = { _ in }
+    /// Буфер изменил кто-то другой (не запись этого моста) — даже если читать его сейчас не нужно.
+    var onExternalChange: () -> Void = {}
 
     init(pasteboard: NSPasteboard) {
         self.pasteboard = pasteboard
@@ -45,6 +53,9 @@ final class PasteboardBridge {
             MainActor.assumeIsolated { self?.poll() }
         }
     }
+
+    /// Счётчик изменений буфера: по нему видно, что содержимое сменилось (своя запись его тоже меняет).
+    var changeCount: Int { pasteboard.changeCount }
 
     /// Нужно ли разрешение пользователя на чтение буфера (macOS 15.4+ спрашивает при программном чтении).
     var needsAccessPermission: Bool {
@@ -73,10 +84,21 @@ final class PasteboardBridge {
         Log.clipboard.info("Записана в буфер картинка \(mime, privacy: .public): \(data.count) байт")
     }
 
+    /// Записать файлы и папки, пришедшие с другого устройства: public.file-url каждого, вместе с маркером.
+    /// Finder вставляет их как обычные скопированные файлы.
+    func writeFiles(_ urls: [URL]) {
+        pasteboard.clearContents()
+        pasteboard.writeObjects(urls.map { $0 as NSURL })
+        pasteboard.setString("1", forType: Self.remoteMarker)
+        lastChangeCount = pasteboard.changeCount
+        Log.clipboard.info("Записаны в буфер файлы: \(urls.count) элементов")
+    }
+
     private func poll() {
         let count = pasteboard.changeCount
         guard count != lastChangeCount else { return }
         lastChangeCount = count
+        onExternalChange()
         guard shouldRead() else { return }
 
         let types = pasteboard.types ?? []
@@ -87,8 +109,20 @@ final class PasteboardBridge {
             Log.clipboard.info("Секретное содержимое (пароль) не передаётся")
             return
         }
+        if types.contains(.fileURL) {
+            guard shouldReadFiles() else {
+                Log.clipboard.info("В буфере файлы, но принять их некому — ничего не отправляется")
+                return
+            }
+            let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? [])
+                // Finder кладёт ссылки вида file:///.file/id=…; Swift обычно сам переводит их в пути, но на всякий случай.
+                .map { ($0 as NSURL).filePathURL ?? $0 }
+            guard !urls.isEmpty else { return }
+            onCopyFiles(urls)
+            return
+        }
         let text = pasteboard.string(forType: .string)
-        if shouldReadImages(), !types.contains(.fileURL), Self.textIsAuxiliary(text),
+        if shouldReadImages(), Self.textIsAuxiliary(text),
            // Первый по порядку в буфере — тот, что положила программа; остальные macOS выводит из него сама
            // (к PNG, например, добавляет TIFF), поэтому берём первый.
            let imageType = types.first(where: Self.imageTypes.contains),

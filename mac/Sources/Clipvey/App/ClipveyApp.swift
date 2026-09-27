@@ -24,11 +24,20 @@ enum Entry {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private var statusBar: StatusBarController?
+    private var toasts: ToastController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        TestHooks.applyAppearance()
         statusBar = StatusBarController(model: model)
+        if let transfers = model.transfers {
+            toasts = ToastController(transfers: transfers)
+        }
         model.start()
         Updater.shared.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model.transfers?.removeUnfinished()
     }
 }
 
@@ -98,6 +107,7 @@ final class AppModel {
         enum Kind {
             case text
             case image
+            case files
         }
 
         let date: Date
@@ -110,8 +120,8 @@ final class AppModel {
     /// Что передано последним; nil — с запуска ничего не передавалось.
     var lastSyncKind: LastSync.Kind? { lastSync?.kind }
 
-    /// «11:03 · от OFFICE-PC», «11:05 · отправлено», «11:07 · картинка от OFFICE-PC» или «11:09 · картинка отправлена»;
-    /// nil — с запуска ничего не передавалось.
+    /// «11:03 · от OFFICE-PC», «11:05 · отправлено», «11:07 · картинка от OFFICE-PC», «11:09 · картинка отправлена»,
+    /// «11:10 · файлы от OFFICE-PC» или «11:12 · файлы отправлены»; nil — с запуска ничего не передавалось.
     var lastSyncText: String? {
         guard let lastSync else { return nil }
         let time = Calendar.current.isDateInToday(lastSync.date)
@@ -126,45 +136,65 @@ final class AppModel {
             return L("\(time) · картинка от \(from)", "\(time) · image from \(from)")
         case (.image, .sent):
             return L("\(time) · картинка отправлена", "\(time) · image sent")
+        case (.files, .received(let from)):
+            return L("\(time) · файлы от \(from)", "\(time) · files from \(from)")
+        case (.files, .sent):
+            return L("\(time) · файлы отправлены", "\(time) · files sent")
         }
     }
 
     @ObservationIgnored let bridge: PasteboardBridge
+    /// Передача файлов и её окошки; nil — узел не запустился.
+    @ObservationIgnored let transfers: FileTransfers?
 
     init() {
         let directory = TestHooks.dataDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Clipvey")
         let pasteboard = TestHooks.pasteboardName.map { NSPasteboard(name: NSPasteboard.Name($0)) } ?? .general
-        bridge = PasteboardBridge(pasteboard: pasteboard)
+        let bridge = PasteboardBridge(pasteboard: pasteboard)
+        self.bridge = bridge
         // Настройка «Не давать Mac засыпать» убрана — стираем её след.
         UserDefaults.standard.removeObject(forKey: "keepAwake")
         do {
             let identity = try DeviceIdentity.loadOrCreate(at: directory.appendingPathComponent("identity.key"))
-            node = ClipveyNode(
+            let node = ClipveyNode(
                 identity: identity,
                 name: TestHooks.deviceName ?? Settings.deviceName ?? AppInfo.deviceName,
                 deviceType: AppInfo.deviceType,
                 imagesEnabled: TestHooks.enabled ? TestHooks.imagesEnabled : Settings.imagesEnabled,
                 filesEnabled: TestHooks.enabled ? TestHooks.filesEnabled : Settings.filesEnabled,
                 store: DeviceStore(directory: directory))
+            self.node = node
+            transfers = FileTransfers(node: node, bridge: bridge, cacheRoot: Self.incomingCacheRoot, downloadsDirectory: Self.downloadsDirectory)
             startupError = nil
         } catch {
             node = nil
+            transfers = nil
             startupError = error.localizedDescription
             Log.app.error("Не удалось загрузить ключ устройства: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     func start() {
-        guard let node else { return }
+        guard let node, let transfers else { return }
+        // Новое содержимое с другого устройства заменяет описание файлов: тихое скачивание отменяется.
         node.onClipReceived = { [weak self] text, from in
+            self?.transfers?.remoteContentArrived()
             self?.bridge.write(text)
             self?.lastSync = LastSync(date: Date(), direction: .received(from: from), kind: .text)
         }
         node.onImageReceived = { [weak self] data, mime, from in
+            self?.transfers?.remoteContentArrived()
             self?.bridge.writeImage(data, mime: mime)
             self?.lastSync = LastSync(date: Date(), direction: .received(from: from), kind: .image)
         }
+        node.onFileOffer = { [weak transfers] offer, deviceID, from in
+            transfers?.receive(offer, deviceID: deviceID, from: from)
+        }
+        transfers.onSynced = { [weak self] direction in
+            self?.lastSync = LastSync(date: Date(), direction: direction, kind: .files)
+        }
+        transfers.cleanCache()
         bridge.shouldRead = { [weak node] in node?.devices.contains(where: \.connected) ?? false }
         bridge.shouldReadImages = { [weak node] in
             guard let node, node.imagesEnabled else { return false }
@@ -175,6 +205,16 @@ final class AppModel {
             if node.sendImage(data, mime: mime) > 0 {
                 self?.lastSync = LastSync(date: Date(), direction: .sent, kind: .image)
             }
+        }
+        bridge.shouldReadFiles = { [weak node] in
+            guard let node, node.filesEnabled else { return false }
+            return node.devices.contains { $0.connected && $0.enabled && $0.acceptsFiles }
+        }
+        bridge.onCopyFiles = { [weak transfers] urls in
+            transfers?.send(urls)
+        }
+        bridge.onExternalChange = { [weak transfers] in
+            transfers?.localContentChanged()
         }
         bridge.onCopy = { [weak self, weak node] text in
             guard let node else { return }
@@ -190,6 +230,27 @@ final class AppModel {
         bridge.start()
         TestHooks.run(node)
         TestHooks.probe(self)
+        TestHooks.runFiles(self)
+    }
+
+    /// Кэш тихо скачанных файлов: ~/Library/Caches/<bundle id>/Incoming; в режиме проверки — в папке --data.
+    private static var incomingCacheRoot: URL {
+        if TestHooks.enabled {
+            return TestHooks.scratchDirectory.appendingPathComponent("Incoming", isDirectory: true)
+        }
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent(Bundle.main.bundleIdentifier ?? "Clipvey", isDirectory: true)
+            .appendingPathComponent("Incoming", isDirectory: true)
+    }
+
+    /// Куда «Загрузить» кладёт большие файлы: ~/Downloads/Clipvey; в режиме проверки — --downloads или папка в --data
+    /// (настоящие Загрузки проверки не трогают).
+    private static var downloadsDirectory: URL {
+        if TestHooks.enabled {
+            return TestHooks.downloadsDirectory ?? TestHooks.scratchDirectory.appendingPathComponent("Downloads", isDirectory: true)
+        }
+        return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Clipvey", isDirectory: true)
     }
 
     // MARK: - Имя и картинки (настройки хранит приложение, узел только применяет)
@@ -253,7 +314,7 @@ final class AppModel {
         }
     }
 
-    /// «Передавать файлы». Переключателя в интерфейсе пока нет; настройка хранится в UserDefaults (filesEnabled).
+    /// «Передавать файлы».
     var filesEnabled: Bool {
         get { node?.filesEnabled ?? Settings.filesEnabled }
         set {
@@ -261,6 +322,9 @@ final class AppModel {
                 Settings.filesEnabled = newValue
             }
             node?.setFilesEnabled(newValue)
+            if !newValue {
+                transfers?.filesDisabled()
+            }
         }
     }
 

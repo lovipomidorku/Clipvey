@@ -29,6 +29,11 @@ final class StatusBarController: NSObject, NSWindowDelegate {
 
     var isShown: Bool { panel.isVisible }
     var window: NSWindow { panel }
+    /// Окно открылось, закрылось или изменило высоту: окошко передачи файлов (ToastController) встаёт под него.
+    var onLayoutChange: (() -> Void)?
+
+    /// Экран со строкой меню, где стоит значок.
+    var menuBarScreen: NSScreen? { statusItem.button?.window?.screen }
 
     init(model: AppModel) {
         self.model = model
@@ -97,6 +102,7 @@ final class StatusBarController: NSObject, NSWindowDelegate {
         // Сразу, в том же обновлении, что и новое содержимое: тогда оба попадают в один кадр.
         panel.setFrame(frame(), display: true)
         panel.invalidateShadow()
+        onLayoutChange?()
     }
 
     /// Рамка окна: ширина содержимого, высота содержимого, верх — под значком.
@@ -124,6 +130,7 @@ final class StatusBarController: NSObject, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.panel.makeFirstResponder(nil)
         }
+        onLayoutChange?()
         statusItem.button?.highlight(true)
         // Клик в другой программе закрывает окно (окно без активации приложения может и не потерять фокус).
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -134,6 +141,7 @@ final class StatusBarController: NSObject, NSWindowDelegate {
     func close() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        onLayoutChange?()
         closedAt = Date()
         statusItem.button?.highlight(false)
         if let outsideClickMonitor {
