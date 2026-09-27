@@ -173,7 +173,7 @@ final class FileTransfers {
                 if background?.offerID == offer.id {
                     background = nil
                 }
-                let problem = FileProblem(error, deviceName: name, directory: root)
+                let problem = FileProblem(error, deviceName: name, inDownloads: false)
                 TestHooks.emitIfEnabled("FILES_FAILED \(offer.id) \(problem.code)")
                 guard problem.code != FileTransferFailure.cancelled.code else { return }
                 showNotice(problem.receiveNotice(from: name))
@@ -207,7 +207,7 @@ final class FileTransfers {
                 TestHooks.emitIfEnabled("FILES_READY \(offer.id) \(urls.count) \(inPasteboard ? "pasteboard" : "saved")")
                 toast?.finish(.done(urls: urls, inPasteboard: inPasteboard))
             } catch {
-                let problem = FileProblem(error, deviceName: name, directory: directory)
+                let problem = FileProblem(error, deviceName: name, inDownloads: true)
                 TestHooks.emitIfEnabled("FILES_FAILED \(offer.id) \(problem.code)")
                 if problem.code == FileTransferFailure.cancelled.code {
                     if let toast { remove(toast) }
@@ -221,13 +221,23 @@ final class FileTransfers {
     /// Папка есть (создаётся не на главном потоке: первая запись в Загрузки показывает вопрос macOS) и места хватает.
     nonisolated private static func prepare(_ directory: URL, needed: Int64) async throws {
         try await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
             do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             } catch let error as CocoaError where error.code == .fileWriteNoPermission {
                 throw FileSaveError.noAccess(error.localizedDescription)
             } catch {
                 throw FileTransferError(.writeFailed, error.localizedDescription)
             }
+            // Папка могла остаться с прошлого раза, а доступ к Загрузкам с тех пор отозван: проверяем записью.
+            let probe = directory.appendingPathComponent(".clipvey-probe-\(Blob.newID().prefix(8))")
+            guard fileManager.createFile(atPath: probe.path, contents: nil) else {
+                if errno == EPERM || errno == EACCES {
+                    throw FileSaveError.noAccess(String(cString: strerror(errno)))
+                }
+                throw FileTransferError(.writeFailed, "не создать файл в «\(directory.path)»: \(String(cString: strerror(errno)))")
+            }
+            try? fileManager.removeItem(at: probe)
             let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             if let available = values?.volumeAvailableCapacityForImportantUsage, available < needed {
                 throw FileSaveError.noSpace(needed: needed, available: available)
@@ -446,17 +456,23 @@ struct FileProblem {
         return FileProblem(code: failure.code, title: title, message: message, opensPrivacySettings: false)
     }
 
-    /// Ошибка скачивания: FileTransferError, FileSaveError или отмена.
+    /// Ошибка скачивания: FileTransferError, FileSaveError или отмена. inDownloads — скачивалось в Загрузки
+    /// (доступ к ним macOS даёт только с разрешения); иначе — в кэш программы.
     @MainActor
-    init(_ error: Error, deviceName name: String, directory: URL) {
-        let downloads = L("«Загрузки»", "Downloads")
+    init(_ error: Error, deviceName name: String, inDownloads: Bool) {
         switch error {
-        case FileSaveError.noAccess:
+        case FileSaveError.noAccess where inDownloads:
             code = "NoAccess"
             title = L("Нет доступа к папке", "No access to the folder")
-            message = L("Разрешите Clipvey доступ к папке \(downloads): Системные настройки → Конфиденциальность и безопасность → Файлы и папки.",
-                        "Allow Clipvey to access \(downloads): System Settings → Privacy & Security → Files & Folders.")
+            message = L("Разрешите Clipvey доступ к папке «Загрузки»: Системные настройки → Конфиденциальность и безопасность → Файлы и папки.",
+                        "Allow Clipvey to access Downloads: System Settings → Privacy & Security → Files & Folders.")
             opensPrivacySettings = true
+            return
+        case FileSaveError.noAccess:
+            code = "NoAccess"
+            title = ""
+            message = L("Не удалось записать файлы на этот Mac: нет доступа к папке.", "Couldn’t save the files on this Mac: no access to the folder.")
+            opensPrivacySettings = false
             return
         case FileSaveError.noSpace(let needed, let available):
             code = "NoSpace"

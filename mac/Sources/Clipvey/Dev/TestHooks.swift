@@ -388,7 +388,6 @@ enum TestHooks {
     private static func demo(_ transfers: FileTransfers) async {
         try? await Task.sleep(for: .seconds(1))
         guard let controller = ToastController.shared else { return }
-        let directory = scratchDirectory
         func shot(_ name: String, withPanel: Bool = false) async {
             try? await Task.sleep(for: .milliseconds(900))
             guard let toastShots else { return }
@@ -413,12 +412,12 @@ enum TestHooks {
         await shot("03-done")
         toast.setForDemo(.done(urls: [], inPasteboard: false))
         await shot("04-done-saved")
-        toast.setForDemo(.failed(FileProblem(FileTransferError(.changed), deviceName: "OFFICE-PC", directory: directory)))
+        toast.setForDemo(.failed(FileProblem(FileTransferError(.changed), deviceName: "OFFICE-PC", inDownloads: true)))
         await shot("05-failed-changed")
         toast.setForDemo(.failed(FileProblem(FileSaveError.noSpace(needed: 1_234_000_000, available: 310_000_000),
-                                             deviceName: "OFFICE-PC", directory: directory)))
+                                             deviceName: "OFFICE-PC", inDownloads: true)))
         await shot("06-failed-space")
-        toast.setForDemo(.failed(FileProblem(FileSaveError.noAccess(""), deviceName: "OFFICE-PC", directory: directory)))
+        toast.setForDemo(.failed(FileProblem(FileSaveError.noAccess(""), deviceName: "OFFICE-PC", inDownloads: true)))
         await shot("07-failed-access")
         transfers.clearForDemo()
         transfers.pushForDemo(FileToast(offer: nil, deviceID: nil, deviceName: "", content: .notice(.sendFailed(.unreadable))))
@@ -427,7 +426,7 @@ enum TestHooks {
         transfers.pushForDemo(FileToast(offer: nil, deviceID: nil, deviceName: "", content: .notice(.sendFailed(.tooLarge))))
         await shot("09-notice-large")
         transfers.clearForDemo()
-        let receiveProblem = FileProblem(FileTransferError(.deviceUnavailable), deviceName: "OFFICE-PC", directory: directory)
+        let receiveProblem = FileProblem(FileTransferError(.deviceUnavailable), deviceName: "OFFICE-PC", inDownloads: true)
         transfers.pushForDemo(FileToast(offer: nil, deviceID: nil, deviceName: "", content: .notice(receiveProblem.receiveNotice(from: "OFFICE-PC"))))
         await shot("10-notice-receive")
         transfers.clearForDemo()
