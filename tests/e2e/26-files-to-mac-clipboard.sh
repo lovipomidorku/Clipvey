@@ -6,6 +6,7 @@
 #   Больше 50 МиБ — окошко «Загрузить»; кнопка нажимается событиями мыши (--auto-download), идёт прогресс,
 #   затем «Готово»: файлы — в папке --downloads и в буфере; пока мышь «на окошке» (--toast-hover), оно не исчезает.
 #   «Отмена» (--auto-cancel) прерывает загрузку: окошко закрывается, недокачанного не остаётся.
+#   Загрузка под новым окошком не теряется; скопированное на Mac её не отменяет и не заменяется ею.
 source "$(dirname "$0")/lib.sh"
 build
 
@@ -102,5 +103,28 @@ sleep 1
 [ -z "$(ls -A "$WORK/cancelled" 2>/dev/null)" ] || fail "после отмены остались файлы: $(ls -A "$WORK/cancelled")"
 say "ок: после отмены ничего не осталось"
 expect_absent "$WORK/mac.out" "^DISCONNECTED" "сеанс не рвался"
+
+# Часть 5: идущая загрузка не теряется под новым окошком. На Mac копируют символическую ссылку — сообщение
+# «нечего отправлять» ложится поверх прогресса; загрузка (начатая кнопкой) не отменяется, а когда сообщение
+# исчезает, окошко снова показывает её. Скопированное на Mac загруженными файлами не заменяется.
+ln -s "$WORK/big/ёлка 🎄.txt" "$WORK/ссылка.txt"
+stop "$MAC_PID"
+start_mac mac "$MAC_NAME" "$BOARD" --downloads "$WORK/under" --auto-download --slow-files 150
+MAC_PID=$LAST_PID
+stop "$PEER_PID"
+start_peer peer "$PEER_NAME" "$PEER_PORT" --send-files "$WORK/big/большой.bin" --send-delay 2
+PEER_PID=$LAST_PID
+expect "$WORK/peer.out" "^FILES_SENT 1 " 30 "двойник отправил большой файл"
+ID="$(offer_id "$WORK/peer.out")"
+expect "$WORK/mac.out" "^TOAST progress $ID$" 15 "загрузка идёт"
+pb write-files "$BOARD" "$WORK/ссылка.txt"
+expect "$WORK/mac.out" "^TOAST notice Empty$" 10 "сообщение легло поверх загрузки"
+expect "$WORK/mac.out" "^FILES_READY $ID 1 saved$" 30 "загрузка не отменена и завершилась; буфер не заменён"
+expect_count "$WORK/mac.out" "^TOAST (progress $ID|done $ID saved)$" 2 20 "сообщение исчезло — окошко снова показывает загрузку"
+# Пути сравниваются как файлы: регистр букв в пути ФС не различает (…/Clipvey и …/clipvey).
+PASTED="$(pb read-files "$BOARD")"
+[ "$(basename "$PASTED")" = "ссылка.txt" ] && [ "$PASTED" -ef "$WORK/ссылка.txt" ] || fail "буфер Mac изменился: $PASTED"
+cmp -s "$WORK/big/большой.bin" "$WORK/under/большой.bin" || fail "загруженный файл отличается"
+say "ок: в буфере — скопированное на Mac, файл — в папке загрузок"
 
 pass
