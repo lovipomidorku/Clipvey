@@ -8,7 +8,8 @@ import Observation
 /// - держит с каждым связанным включённым устройством не больше одного сеанса;
 /// - пересылает фрагменты буфера (текст и картинки) между устройствами;
 /// - передаёт файлы по запросу (NodeFiles.swift);
-/// - ведёт связывание в обеих ролях.
+/// - ведёт связывание в обеих ролях;
+/// - держит общие настройки (docs/protocol.md, «Общие настройки») в согласии со всеми устройствами.
 /// Правила — docs/protocol.md; логика совпадает с Clipvey.Core на C#.
 /// Интерфейсу узел отдаёт коды (FailureReason, PairingResult), а не готовые строки.
 @MainActor
@@ -93,6 +94,9 @@ final class ClipveyNode {
     /// «Передавать файлы»: заявлять file в caps, принимать и отправлять описания файлов. Меняется через setFilesEnabled
     /// (NodeFiles.swift; поэтому не private(set)).
     var filesEnabled: Bool
+    /// Общие настройки: меняются через setAutoDownloadMB или приходят более новые с другого устройства.
+    /// Хранит их приложение (onSettingsChanged).
+    private(set) var sharedSettings: SharedSettings
 
     /// Пришёл текст с другого устройства (переводы строк — \n) и имя устройства, от которого он пришёл.
     @ObservationIgnored var onClipReceived: ((_ text: String, _ from: String) -> Void)?
@@ -103,6 +107,8 @@ final class ClipveyNode {
     @ObservationIgnored var onFileOffer: ((_ offer: FileOffer, _ deviceID: String, _ from: String) -> Void)?
     /// Изменилось число подключённых устройств.
     @ObservationIgnored var onConnectionsChanged: ((Int) -> Void)?
+    /// Общие настройки изменились (здесь или пришли новее): приложение сохраняет их целиком, все три поля.
+    @ObservationIgnored var onSettingsChanged: ((SharedSettings) -> Void)?
     /// Для самопроверки: события строками вида «CONNECTED имя».
     @ObservationIgnored var onEvent: ((String) -> Void)?
 
@@ -137,13 +143,16 @@ final class ClipveyNode {
         let type: DeviceType
     }
 
-    init(identity: DeviceIdentity, name: String, deviceType: DeviceType, imagesEnabled: Bool, filesEnabled: Bool, store: DeviceStore) {
+    /// sharedSettings — сохранённые общие настройки (nil — по умолчанию: 50 МиБ, changed = 0, by = свой deviceId).
+    init(identity: DeviceIdentity, name: String, deviceType: DeviceType, imagesEnabled: Bool, filesEnabled: Bool,
+         sharedSettings: SharedSettings? = nil, store: DeviceStore) {
         self.identity = identity
         let normalized = Self.normalizedName(name)
         self.name = normalized.isEmpty ? "Mac" : normalized
         self.deviceType = deviceType
         self.imagesEnabled = imagesEnabled
         self.filesEnabled = filesEnabled
+        self.sharedSettings = sharedSettings?.normalized() ?? .default(deviceID: identity.deviceID)
         self.store = store
         refreshDevices()
     }
@@ -233,6 +242,55 @@ final class ClipveyNode {
         }
         sendInfoToAll()
         refreshDevices()
+    }
+
+    // MARK: - Общие настройки
+
+    /// Пользователь изменил «Скачивать автоматически» (МиБ; незнакомое значение — ближайшее допустимое):
+    /// changed — сейчас, by — этот Mac; разослать всем сеансам. То же значение — ничего не меняется.
+    /// changed не меньше прежнего + 1: изменение здесь новее принятого, даже если часы другого устройства спешат.
+    func setAutoDownloadMB(_ mb: Int) {
+        let value = SharedSettings.nearest(mb)
+        guard value != sharedSettings.autoDownloadMB else { return }
+        let now = Int64((Date().timeIntervalSince1970 * 1000).rounded(.down))
+        let updated = SharedSettings(autoDownloadMB: value, changed: max(now, sharedSettings.changed + 1), by: identity.deviceID)
+        sharedSettings = updated
+        Log.network.notice("Скачивать автоматически: до \(value) МиБ (изменено здесь)")
+        settingsChanged(updated)
+        sendSettings(updated, to: Array(sessions.values))
+    }
+
+    /// settings пришли по сеансу: новее своих — принять, сообщить приложению и переслать всем остальным сеансам.
+    private func handleSettings(_ incoming: SharedSettings, from session: ActiveSession) {
+        guard incoming.isNewer(than: sharedSettings) else {
+            if incoming != sharedSettings {
+                Log.network.info("Общие настройки от «\(session.peerName, privacy: .public)» старше своих (\(incoming.description, privacy: .public) ≤ \(self.sharedSettings.description, privacy: .public)) — пропущены")
+            }
+            return
+        }
+        sharedSettings = incoming
+        Log.network.notice("Общие настройки от «\(session.peerName, privacy: .public)»: скачивать автоматически до \(incoming.autoDownloadMB) МиБ (\(incoming.changed), \(incoming.by, privacy: .public))")
+        settingsChanged(incoming)
+        sendSettings(incoming, to: sessions.values.filter { $0.peerID != session.peerID })
+    }
+
+    private func settingsChanged(_ settings: SharedSettings) {
+        onEvent?("SETTINGS \(settings.description)")
+        onSettingsChanged?(settings)
+    }
+
+    private func sendSettings(_ settings: SharedSettings, to targets: [ActiveSession]) {
+        for session in targets {
+            let link = session.link
+            let peerName = session.peerName
+            Task {
+                do {
+                    try await link.send(.settings(settings))
+                } catch {
+                    Log.network.info("Не удалось отправить общие настройки «\(peerName, privacy: .public)»: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
     }
 
     private var ownInfo: PeerInfo {
@@ -793,6 +851,8 @@ final class ClipveyNode {
         onEvent?("CONNECTED \(peerName)")
         emitInfo(session)
         Task { await runSession(session) }
+        // Свои общие настройки — сразу после ready (старые версии settings пропускают).
+        sendSettings(sharedSettings, to: [session])
         refreshDevices()
     }
 
@@ -845,6 +905,8 @@ final class ClipveyNode {
                     handleClip(clip, from: session)
                 case .info(let info):
                     handleInfo(info, from: session)
+                case .settings(let settings):
+                    handleSettings(settings, from: session)
                 case .blobStart(let start):
                     handleBlobStart(start, from: session)
                 case .blobChunk(let id, let seq, let data):

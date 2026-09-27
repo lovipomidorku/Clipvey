@@ -255,6 +255,8 @@ public enum WireMessage: Sendable {
     case fileChunk(req: UInt32, data: Data)
     /// Сообщение о файлах (или двоичный кадр) не прошло проверку: пишется в журнал и пропускается, сеанс продолжается.
     case invalidFileMessage(type: String, reason: String)
+    /// Общие настройки (разобраны без ошибок: см. SharedSettings.parse).
+    case settings(SharedSettings)
     case ping
     case pong
     case unknown(String)
@@ -284,6 +286,7 @@ public enum WireMessage: Sendable {
         case .fileCancel: "file_cancel"
         case .fileChunk: "file_chunk"
         case .invalidFileMessage(let type, _): type
+        case .settings: "settings"
         case .ping: "ping"
         case .pong: "pong"
         case .unknown(let type): type
@@ -362,6 +365,10 @@ public enum WireMessage: Sendable {
             object["reason"] = reason
         case .fileCancel(let req):
             object["req"] = req
+        case .settings(let settings):
+            object["autoDownloadMB"] = settings.autoDownloadMB
+            object["changed"] = settings.changed
+            object["by"] = settings.by
         case .pairVerified, .pairDone, .ping, .pong, .unknown, .fileChunk, .invalidFileMessage:
             break
         }
@@ -453,6 +460,7 @@ public enum WireMessage: Sendable {
         case "blob_end": return .blobEnd(id: try string("id"))
         case "file_offer", "file_get", "file_end", "file_error", "file_cancel":
             return decodeFileMessage(type, object)
+        case "settings": return .settings(SharedSettings.parse(object))
         case "ping": return .ping
         case "pong": return .pong
         default: return .unknown(type)

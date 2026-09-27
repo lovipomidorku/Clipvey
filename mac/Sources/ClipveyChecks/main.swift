@@ -112,6 +112,48 @@ func sampleMessages(keyI: Data, keyR: Data, commit: Data, nonceI: Data, nonceR: 
         ("file_end", .fileEnd(req: 7, size: 2_000_000_000)),
         ("file_error", .fileError(req: 8, reason: "changed")),
         ("file_cancel", .fileCancel(req: 4_294_967_295)),
+        ("settings", .settings(SharedSettings(autoDownloadMB: 300, changed: 1_790_000_000_000, by: idI))),
+    ]
+}
+
+/// Общие настройки (docs/protocol.md, «Общие настройки»): ближайшее допустимое, разбор без полей и с неверными
+/// полями, «кто новее». Правила, которых нет в docs, закреплены здесь для обеих реализаций.
+func sampleSharedSettings() -> [String: Any] {
+    let nearest: [(Double, Int)] = [
+        (-5, 50), (0, 50), (50, 50), (75, 50), (76, 100), (99.5, 100), (200, 100), (201, 300), (400, 300), (401, 500),
+        (750, 500), (751, 1000), (5620, 1000), (5621, 10240), (10240, 10240), (2_147_483_647, 10240), (1e20, 10240),
+    ]
+    let parse: [(String, String, Int, Int64, String)] = [
+        ("все поля", #"{"t":"settings","autoDownloadMB":300,"changed":1790000000000,"by":"ec2b4635da6e02fc8b8f6095a12ceb88"}"#,
+         300, 1_790_000_000_000, "ec2b4635da6e02fc8b8f6095a12ceb88"),
+        ("без полей", #"{"t":"settings"}"#, 50, 0, ""),
+        ("только значение", #"{"t":"settings","autoDownloadMB":100}"#, 100, 0, ""),
+        ("без значения", #"{"t":"settings","changed":7,"by":"x"}"#, 50, 7, "x"),
+        ("незнакомое значение", #"{"t":"settings","autoDownloadMB":2000,"changed":7,"by":"x"}"#, 1000, 7, "x"),
+        ("дробное значение", #"{"t":"settings","autoDownloadMB":99.5,"changed":7,"by":"x"}"#, 100, 7, "x"),
+        ("огромное значение", #"{"t":"settings","autoDownloadMB":1e20,"changed":7,"by":"x"}"#, 10240, 7, "x"),
+        ("строки вместо чисел", #"{"t":"settings","autoDownloadMB":"300","changed":"7","by":5}"#, 50, 0, ""),
+        ("true, отрицательное, null", #"{"t":"settings","autoDownloadMB":true,"changed":-3,"by":null}"#, 50, 0, ""),
+        ("дробное changed", #"{"t":"settings","autoDownloadMB":300,"changed":1.5,"by":"x"}"#, 300, 0, "x"),
+        ("changed не меньше 9·10^15", #"{"t":"settings","autoDownloadMB":300,"changed":9000000000000000,"by":"x"}"#, 300, 0, "x"),
+    ]
+    let newer: [((Int, Int64, String), (Int, Int64, String), Bool)] = [
+        ((50, 5001, "0000"), (100, 5000, "aaaa"), true),
+        ((300, 4999, "ffff"), (100, 5000, "aaaa"), false),
+        ((50, 5000, "aaab"), (100, 5000, "aaaa"), true),
+        ((300, 5000, "aaa"), (100, 5000, "aaaa"), false),
+        ((100, 5000, "aaaa"), (300, 5000, "aaaa"), false),
+        ((50, 1, "a"), (50, 1, "B"), true),
+        ((10240, 0, ""), (50, 0, "0"), false),
+    ]
+    func triple(_ value: (Int, Int64, String)) -> [Any] { [value.0, value.1, value.2] }
+    return [
+        "comment": "Общие настройки: allowed_mb — допустимые значения (МиБ, 10240 — «всегда», ровно 10 ГиБ); nearest — ближайшее допустимое (при равном расстоянии — меньшее); parse — разбор settings: autoDownloadMB — любое число → ближайшее, нет или не число — 50; changed — целое от 0 до 9·10^15, иначе 0; by — строка, иначе \"\"; newer — новее ли a, чем b: большее changed, при равном — большее by (порядковое сравнение).",
+        "allowed_mb": SharedSettings.allowedMB,
+        "default_mb": SharedSettings.defaultMB,
+        "nearest": nearest.map { [$0.0, $0.1] as [Any] },
+        "parse": parse.map { ["name": $0.0, "json": $0.1, "autoDownloadMB": $0.2, "changed": $0.3, "by": $0.4] as [String: Any] },
+        "newer": newer.map { ["a": triple($0.0), "b": triple($0.1), "a_newer": $0.2] as [String: Any] },
     ]
 }
 
@@ -350,6 +392,7 @@ func generate() -> [String: Any] {
         "file_chunk_frames": chunkFrames,
         "file_offers": sampleOffers(),
         "file_names": sampleFileNames(),
+        "shared_settings": sampleSharedSettings(),
     ]
 }
 
@@ -500,6 +543,7 @@ var failures: [String] = []
     verifyNewFields(v)
     verifyBlob(v)
     verifyFiles(v)
+    verifySharedSettings(v)
 
     // Подпись релиза (docs/releases.md): base64 r‖s, ECDSA P-256 с SHA-256, одноразовый ключ.
     if let release = v["release_signature"] as? [String: String] {
@@ -512,6 +556,56 @@ var failures: [String] = []
         } else {
             check("подпись релиза: разбор ключа и подписи", false)
         }
+    }
+}
+
+// MARK: - Общие настройки
+
+@MainActor func verifySharedSettings(_ v: [String: Any]) {
+    guard let section = v["shared_settings"] as? [String: Any],
+          let allowed = section["allowed_mb"] as? [Int],
+          let nearest = section["nearest"] as? [[NSNumber]],
+          let parse = section["parse"] as? [[String: Any]],
+          let newer = section["newer"] as? [[String: Any]] else {
+        check("раздел shared_settings", false, "нет или неполный")
+        return
+    }
+    check("общие настройки: допустимые значения", SharedSettings.allowedMB == allowed && SharedSettings.defaultMB == section["default_mb"] as? Int)
+    check("общие настройки: «всегда» — ровно 10 ГиБ",
+          SharedSettings(autoDownloadMB: SharedSettings.alwaysMB, changed: 0, by: "").autoDownloadBytes == ProtocolLimits.maxFileTotalBytes)
+    check("общие настройки: 50 МиБ по умолчанию", SharedSettings.default(deviceID: "x").autoDownloadBytes == 50 * 1024 * 1024)
+    for pair in nearest {
+        let input = pair[0].doubleValue, expected = pair[1].intValue
+        expectEqual("ближайшее к \(pair[0])", String(SharedSettings.nearest(input)), String(expected))
+        if input == input.rounded(), abs(input) < 1e18 {
+            expectEqual("ближайшее к \(pair[0]) (целое)", String(SharedSettings.nearest(Int(input))), String(expected))
+        }
+    }
+    for entry in parse {
+        let name = entry["name"] as! String
+        let expected = SharedSettings(autoDownloadMB: entry["autoDownloadMB"] as! Int, changed: (entry["changed"] as! NSNumber).int64Value,
+                                      by: entry["by"] as! String)
+        if case .settings(let settings)? = try? WireMessage.decode(Data((entry["json"] as! String).utf8)) {
+            check("settings разбирается: \(name)", settings == expected, "получено \(settings), ожидалось \(expected)")
+        } else {
+            check("settings разбирается: \(name)", false, "не settings")
+        }
+    }
+    func settings(_ value: Any?) -> SharedSettings {
+        let array = value as! [Any]
+        return SharedSettings(autoDownloadMB: array[0] as! Int, changed: (array[1] as! NSNumber).int64Value, by: array[2] as! String)
+    }
+    for entry in newer {
+        let a = settings(entry["a"]), b = settings(entry["b"])
+        check("новее: \(a) против \(b)", a.isNewer(than: b) == (entry["a_newer"] as! Bool))
+    }
+    // Образец сообщения: разбор и обратно.
+    let messages = v["messages"] as! [[String: String]]
+    if let json = messages.first(where: { $0["name"] == "settings" })?["json"],
+       case .settings(let sample)? = try? WireMessage.decode(Data(json.utf8)) {
+        check("settings: поля образца", sample.autoDownloadMB == 300 && sample.changed == 1_790_000_000_000 && sample.by.count == 32)
+    } else {
+        check("образец settings разбирается", false)
     }
 }
 

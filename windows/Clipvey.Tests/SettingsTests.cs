@@ -90,6 +90,68 @@ public class SharedSettingsTests
     }
 }
 
+/// Общие настройки по tests/vectors.json (раздел shared_settings и образец settings): те же правила, что у Mac.
+public class SharedSettingsVectorTests
+{
+    private static JsonObject Section => Vectors.Section("shared_settings");
+
+    [Fact]
+    public void AllowedValues()
+    {
+        Assert.Equal(Section["allowed_mb"]!.AsArray().Select(value => value!.GetValue<int>()), SharedSettings.AllowedMB);
+        Assert.True(Section["default_mb"]!.GetValue<int>() == SharedSettings.DefaultMB);
+    }
+
+    [Fact]
+    public void NearestTable()
+    {
+        foreach (var pair in Section["nearest"]!.AsArray())
+        {
+            var input = pair![0]!.GetValue<double>();
+            var expected = pair[1]!.GetValue<int>();
+            Assert.True(expected == SharedSettings.Nearest(input), $"ближайшее к {input}: {SharedSettings.Nearest(input)}, ожидалось {expected}");
+            if (input == Math.Round(input) && input is >= int.MinValue and <= int.MaxValue)
+                Assert.Equal(expected, SharedSettings.Nearest((int)input));
+        }
+    }
+
+    [Fact]
+    public void ParseTable()
+    {
+        foreach (var entry in Section["parse"]!.AsArray())
+        {
+            var expected = new SharedSettings(entry!["autoDownloadMB"]!.GetValue<int>(), entry["changed"]!.GetValue<long>(), Vectors.String(entry["by"]));
+            var parsed = SharedSettings.Parse(Messages.Decode(Encoding.UTF8.GetBytes(Vectors.String(entry["json"]))));
+            Assert.True(expected == parsed, $"{Vectors.String(entry["name"])}: {parsed}, ожидалось {expected}");
+        }
+    }
+
+    [Fact]
+    public void NewerTable()
+    {
+        static SharedSettings Settings(JsonNode? node) =>
+            new(node![0]!.GetValue<int>(), node[1]!.GetValue<long>(), node[2]!.GetValue<string>());
+        foreach (var entry in Section["newer"]!.AsArray())
+        {
+            var a = Settings(entry!["a"]);
+            var b = Settings(entry["b"]);
+            Assert.True(entry["a_newer"]!.GetValue<bool>() == a.IsNewerThan(b), $"новее ли {a}, чем {b}");
+        }
+    }
+
+    [Fact]
+    public void SampleMessageFromNode()
+    {
+        var sample = JsonNode.Parse(Vectors.String(Vectors.Root["messages"]!.AsArray().Single(message => Vectors.String(message!["name"]) == "settings")!["json"]))!.AsObject();
+        var settings = SharedSettings.Parse(sample);
+        Assert.Equal(300, settings.AutoDownloadMB);
+        Assert.Equal(1_790_000_000_000, settings.Changed);
+        Assert.Equal(Vectors.String(Vectors.Section("device_id")["initiator"]), settings.By);
+        // Как собирает узел — тот же объект JSON.
+        Assert.True(JsonNode.DeepEquals(sample, JsonNode.Parse(Messages.Encode(settings.ToMessage()))));
+    }
+}
+
 /// Несколько настоящих узлов в одном процессе на 127.0.0.1; связи (links) записаны в списки устройств сразу.
 internal sealed class NodeMesh : IAsyncDisposable
 {

@@ -503,6 +503,10 @@
     {
       "json": "{\"req\":4294967295,\"t\":\"file_cancel\"}",
       "name": "file_cancel"
+    },
+    {
+      "json": "{\"by\":\"ec2b4635da6e02fc8b8f6095a12ceb88\",\"changed\":1790000000000,\"autoDownloadMB\":300,\"t\":\"settings\"}",
+      "name": "settings"
     }
   ],
   "pairing": {
@@ -525,5 +529,259 @@
     "k_ri": "5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
     "okm": "1b5fac802ea52916faf0640ba37c382497c9e9fabc8a0bbedaac759b5f14c3bd5b40918ae4710e3af4db34d84cb712208b1f124859b2182ef212e8cd1b7d3cd1",
     "th": "0e651d3055ef78f12904500693c0f1dd95650faa49ae72e47ed59e0c51f2ff9b"
+  },
+  "shared_settings": {
+    "allowed_mb": [
+      50,
+      100,
+      300,
+      500,
+      1000,
+      10240
+    ],
+    "comment": "Общие настройки: allowed_mb — допустимые значения (МиБ, 10240 — «всегда», ровно 10 ГиБ); nearest — ближайшее допустимое (при равном расстоянии — меньшее); parse — разбор settings: autoDownloadMB — любое число → ближайшее, нет или не число — 50; changed — целое от 0 до 9·10^15, иначе 0; by — строка, иначе \"\"; newer — новее ли a, чем b: большее changed, при равном — большее by (порядковое сравнение).",
+    "default_mb": 50,
+    "nearest": [
+      [
+        -5,
+        50
+      ],
+      [
+        0,
+        50
+      ],
+      [
+        50,
+        50
+      ],
+      [
+        75,
+        50
+      ],
+      [
+        76,
+        100
+      ],
+      [
+        99.5,
+        100
+      ],
+      [
+        200,
+        100
+      ],
+      [
+        201,
+        300
+      ],
+      [
+        400,
+        300
+      ],
+      [
+        401,
+        500
+      ],
+      [
+        750,
+        500
+      ],
+      [
+        751,
+        1000
+      ],
+      [
+        5620,
+        1000
+      ],
+      [
+        5621,
+        10240
+      ],
+      [
+        10240,
+        10240
+      ],
+      [
+        2147483647,
+        10240
+      ],
+      [
+        1e+20,
+        10240
+      ]
+    ],
+    "newer": [
+      {
+        "a": [
+          50,
+          5001,
+          "0000"
+        ],
+        "a_newer": true,
+        "b": [
+          100,
+          5000,
+          "aaaa"
+        ]
+      },
+      {
+        "a": [
+          300,
+          4999,
+          "ffff"
+        ],
+        "a_newer": false,
+        "b": [
+          100,
+          5000,
+          "aaaa"
+        ]
+      },
+      {
+        "a": [
+          50,
+          5000,
+          "aaab"
+        ],
+        "a_newer": true,
+        "b": [
+          100,
+          5000,
+          "aaaa"
+        ]
+      },
+      {
+        "a": [
+          300,
+          5000,
+          "aaa"
+        ],
+        "a_newer": false,
+        "b": [
+          100,
+          5000,
+          "aaaa"
+        ]
+      },
+      {
+        "a": [
+          100,
+          5000,
+          "aaaa"
+        ],
+        "a_newer": false,
+        "b": [
+          300,
+          5000,
+          "aaaa"
+        ]
+      },
+      {
+        "a": [
+          50,
+          1,
+          "a"
+        ],
+        "a_newer": true,
+        "b": [
+          50,
+          1,
+          "B"
+        ]
+      },
+      {
+        "a": [
+          10240,
+          0,
+          ""
+        ],
+        "a_newer": false,
+        "b": [
+          50,
+          0,
+          "0"
+        ]
+      }
+    ],
+    "parse": [
+      {
+        "autoDownloadMB": 300,
+        "by": "ec2b4635da6e02fc8b8f6095a12ceb88",
+        "changed": 1790000000000,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":300,\"changed\":1790000000000,\"by\":\"ec2b4635da6e02fc8b8f6095a12ceb88\"}",
+        "name": "все поля"
+      },
+      {
+        "autoDownloadMB": 50,
+        "by": "",
+        "changed": 0,
+        "json": "{\"t\":\"settings\"}",
+        "name": "без полей"
+      },
+      {
+        "autoDownloadMB": 100,
+        "by": "",
+        "changed": 0,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":100}",
+        "name": "только значение"
+      },
+      {
+        "autoDownloadMB": 50,
+        "by": "x",
+        "changed": 7,
+        "json": "{\"t\":\"settings\",\"changed\":7,\"by\":\"x\"}",
+        "name": "без значения"
+      },
+      {
+        "autoDownloadMB": 1000,
+        "by": "x",
+        "changed": 7,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":2000,\"changed\":7,\"by\":\"x\"}",
+        "name": "незнакомое значение"
+      },
+      {
+        "autoDownloadMB": 100,
+        "by": "x",
+        "changed": 7,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":99.5,\"changed\":7,\"by\":\"x\"}",
+        "name": "дробное значение"
+      },
+      {
+        "autoDownloadMB": 10240,
+        "by": "x",
+        "changed": 7,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":1e20,\"changed\":7,\"by\":\"x\"}",
+        "name": "огромное значение"
+      },
+      {
+        "autoDownloadMB": 50,
+        "by": "",
+        "changed": 0,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":\"300\",\"changed\":\"7\",\"by\":5}",
+        "name": "строки вместо чисел"
+      },
+      {
+        "autoDownloadMB": 50,
+        "by": "",
+        "changed": 0,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":true,\"changed\":-3,\"by\":null}",
+        "name": "true, отрицательное, null"
+      },
+      {
+        "autoDownloadMB": 300,
+        "by": "x",
+        "changed": 0,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":300,\"changed\":1.5,\"by\":\"x\"}",
+        "name": "дробное changed"
+      },
+      {
+        "autoDownloadMB": 300,
+        "by": "x",
+        "changed": 0,
+        "json": "{\"t\":\"settings\",\"autoDownloadMB\":300,\"changed\":9000000000000000,\"by\":\"x\"}",
+        "name": "changed не меньше 9·10^15"
+      }
+    ]
   }
 }

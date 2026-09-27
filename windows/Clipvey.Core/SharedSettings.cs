@@ -56,7 +56,7 @@ public sealed record SharedSettings(int AutoDownloadMB, long Changed, string By)
     };
 
     /// Разбор settings. Поля не обязательны (старые и будущие версии): autoDownloadMB — любое число, приводится
-    /// к ближайшему допустимому, нет или не число — 50; changed — целое ≥ 0, иначе 0; by — строка, иначе "".
+    /// к ближайшему допустимому, нет или не число — 50; changed — целое от 0 до 9·10^15, иначе 0; by — строка, иначе "".
     /// Настройки без changed и by никогда не новее своих: так пустое сообщение ничего не меняет.
     public static SharedSettings Parse(JsonObject message)
     {
@@ -65,7 +65,8 @@ public sealed record SharedSettings(int AutoDownloadMB, long Changed, string By)
             mb = Nearest((double)integer);
         else if (message["autoDownloadMB"] is JsonValue value && value.TryGetValue(out double number))
             mb = Nearest(number);
-        var changed = Messages.OptionalInteger(message, "changed") is { } time && time > 0 ? time : 0;
+        // Как на Mac: целые до 9·10^15 (точно представимые в double).
+        var changed = Messages.OptionalInteger(message, "changed") is { } time and > 0 and < 9_000_000_000_000_000 ? time : 0;
         return new SharedSettings(mb, changed, Messages.OptionalString(message, "by") ?? "");
     }
 
